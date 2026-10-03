@@ -1,0 +1,26 @@
+[extension]
+id = "codex-rozi-sessions"
+title = "Codex threads"
+description = "One Activity row per Codex thread loaded in its background server, grouped by worktree; selecting a row switches Codex to it"
+version = "0.1.0"
+api = 1
+min_rozi = "0.0.28"
+homepage = "https://github.com/tui-lipan/codex-rozi-sessions"
+
+# Defaults. Override them in [extensions.codex-rozi-sessions] in config.toml.
+[settings]
+# The Codex executable.
+codex = "codex"
+# Seconds between polls of Codex's background server.
+poll_seconds = 2
+# "all" lists every loaded thread. "cwd" lists only threads working in or below the directory the
+# pane is in, for when several panes each run Codex for a different project.
+scope = "all"
+# Selecting a row switches Codex to that thread by typing `/resume` into its empty prompt.
+# false only lists threads and never types into Codex.
+switching = true
+
+[[services]]
+name = "watch"
+exec = ["python3", "{extension_dir}/bin/codex_sessions.py"]
+restart = "on-failure"

@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  service:
+    name: Service tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Unit tests
+        run: python -m unittest discover tests -p 'test_*.py'
+
+  extension:
+    name: Rozi extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tui-lipan/rozi
+          path: .ci/rozi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .ci/rozi
+      - name: Validate extension manifest
+        run: cargo run --manifest-path .ci/rozi/Cargo.toml --bin rozi -- extensions check "$GITHUB_WORKSPACE"
