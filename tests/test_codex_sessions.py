@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import queue
 import socket
 import struct
 import sys
@@ -611,6 +612,26 @@ class AppServerTests(unittest.TestCase):
             with self.assertRaises(cs.SessionsError):
                 server.loaded_threads()
         self.assertIsNone(server.sock)
+
+
+class WatchHostTest(unittest.TestCase):
+    def test_end_of_file_on_a_stdin_pipe_stops_the_service(self) -> None:
+        read_end, write_end = os.pipe()
+        messages: queue.Queue[tuple[object, ...]] = queue.Queue()
+        try:
+            self.assertTrue(cs.watch_host(messages, read_end))
+            self.assertTrue(messages.empty())
+            os.close(write_end)
+            self.assertEqual(messages.get(timeout=5), ("stop",))
+        finally:
+            os.close(read_end)
+
+    def test_a_stdin_that_is_not_a_pipe_is_not_watched(self) -> None:
+        # Older rozi releases hand services `/dev/null`, which is at end of file from the start.
+        messages: queue.Queue[tuple[object, ...]] = queue.Queue()
+        with open(os.devnull, "rb") as devnull:
+            self.assertFalse(cs.watch_host(messages, devnull.fileno()))
+        self.assertTrue(messages.empty())
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import os
 import queue
 import re
 import signal
+import stat
 import socket
 import struct
 import subprocess
@@ -1023,6 +1024,32 @@ def activation(line: str) -> str | None:
     return text(value.get("activate"))
 
 
+def watch_host(messages: "queue.Queue[tuple[object, ...]]", fd: int = 0) -> bool:
+    """Queue a stop once rozi is gone; False when this rozi gives no way to tell.
+
+    rozi holds a service's stdin pipe open for as long as it runs and never writes to it, so end of
+    file means rozi exited, even if it was killed before it could stop this service. Older rozi
+    releases hand services `/dev/null`, which is at end of file from the start, so only a pipe is
+    watched.
+    """
+    try:
+        if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            return False
+    except OSError:
+        return False
+
+    def wait() -> None:
+        try:
+            while os.read(fd, 4096):
+                pass
+        except OSError:
+            pass
+        messages.put(("stop",))
+
+    threading.Thread(target=wait, name="host", daemon=True).start()
+    return True
+
+
 def main() -> int:
     if os.environ.get("ROZI_EXTENSION") != EXTENSION_ID:
         print(f"{EXTENSION_ID} must be launched by Rozi", file=sys.stderr)
@@ -1034,6 +1061,7 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    watch_host(service.messages)
     try:
         return service.run()
     finally:

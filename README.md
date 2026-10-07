@@ -127,8 +127,9 @@ thread it shows and threads working in or below the pane's directory.
   marks experimental. A Codex release that changes it shows up as no rows, not as wrong ones.
 - Switching reads Codex's screen. A future Codex release that redraws its prompt differently makes
   the extension refuse to switch rather than guess.
-- The service runs only while a rozi client with the extension is attached. Its errors go to a
-  stream rozi discards, so a missing `codex` shows up as no rows rather than as a message.
+- The service runs only while a rozi client with the extension is attached. With a rozi newer
+  than 0.0.29, it also exits on its own when that client is killed. Its errors go to a stream rozi
+  discards, so a missing `codex` shows up as no rows rather than as a message.
 
 ## Development
 
