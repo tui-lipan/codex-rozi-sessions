@@ -2,7 +2,7 @@
 id = "codex-rozi-sessions"
 title = "Codex threads"
 description = "One Activity row per Codex thread loaded in its background server, grouped by worktree; selecting a row switches Codex to it"
-version = "0.1.0"
+version = "0.1.1"
 api = 1
 min_rozi = "0.0.28"
 homepage = "https://github.com/tui-lipan/codex-rozi-sessions"
