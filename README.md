@@ -18,7 +18,7 @@ Activity
 
 ## Requirements
 
-- rozi 0.0.28 or newer
+- rozi 0.0.30 or newer, for the `agent` kind of published rows
 - Codex 0.160 or newer, with its background server (`codex app-server daemon`), which Codex starts
   on its own unless you run it with `--no-daemon`
 - Python 3 available as `python3`

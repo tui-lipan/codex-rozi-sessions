@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 from unittest.mock import patch
 
@@ -394,6 +395,13 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(cs.activation('{"activate":"b"}\n'), "b")
         self.assertIsNone(cs.activation('{"ok":true}\n'))
         self.assertIsNone(cs.activation("garbage"))
+
+    def test_the_stream_declares_its_rows_agents(self):
+        service = cs.SessionsService(cs.Settings(), FakeCli(THREADS, []))
+        with mock.patch.object(cs.subprocess, "Popen") as popen:
+            popen.return_value.stdout = iter(())
+            service.start_publisher(7)
+        self.assertEqual(popen.call_args.args[0][1:], ["publish", "--kind", "agent"])
 
     def test_poll_publishes_each_host_once_until_its_rows_change(self):
         class PollCli:
