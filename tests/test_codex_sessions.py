@@ -104,7 +104,7 @@ class ThreadTests(unittest.TestCase):
              ("blocked", "Approval required")),
             (thread("a", status="active", flags=["waitingOnUserInput"]), False,
              ("blocked", "Question needs an answer")),
-            (thread("a", status="systemError"), True, ("idle", "Thread failed")),
+            (thread("a", status="systemError"), True, ("error", "Thread failed")),
             (thread("a"), False, ("idle", None)),
             (thread("a"), True, ("done", None)),
         ]
@@ -122,6 +122,13 @@ class ThreadTests(unittest.TestCase):
         row = thread("abc", name=None, preview="first line\nsecond", cwd="/w/tree").row(True, False)
         self.assertEqual(row, {"id": "abc", "title": "first line", "status": "idle", "active": True,
                                "native_session": "abc", "cwd": "/w/tree"})
+
+    def test_failed_threads_publish_error_even_after_a_previous_finished_turn(self):
+        for finished in (False, True):
+            with self.subTest(finished=finished):
+                row = thread("failed", status="systemError").row(False, finished)
+                self.assertEqual(row["status"], "error")
+                self.assertEqual(row["reason"], "Thread failed")
 
     def test_malformed_threads_are_dropped(self):
         self.assertIsNone(cs.Thread.from_wire({"name": "no id"}))

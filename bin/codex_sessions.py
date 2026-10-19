@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 COMMAND_TIMEOUT = 5.0
 SOCKET_TIMEOUT = 5.0
 # How long to wait for Codex to show the selected thread after `/resume`.
@@ -152,7 +152,7 @@ class Thread:
                 return "blocked", "Question needs an answer"
             return "working", None
         if self.status == "systemError":
-            return "idle", "Thread failed"
+            return "error", "Thread failed"
         return ("done" if finished else "idle"), None
 
     def label(self) -> str:

@@ -26,8 +26,8 @@ Python service.
   running turn, and the daemon reports the shown thread as not active. Read the typed command back
   before pressing Enter.
 - Keep the service standard-library Python 3 with no third-party dependencies.
-- A row status must be `working`, `idle`, `blocked`, or `done`; rozi reads any other status word as
-  a live run.
+- A published row status must be `working`, `idle`, `blocked`, `done`, or `error`; rozi reads
+  any other status word as a live run.
 - Keep `README.md` in sync with behavior, settings, and `min_rozi`.
 - Bump `version` in `extension.toml`, and `VERSION` in `bin/codex_sessions.py`, with every change
   users install: patch for a fix, minor for a feature or setting. rozi offers an update whenever

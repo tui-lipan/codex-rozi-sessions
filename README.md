@@ -62,7 +62,9 @@ no rows, and is left to rozi's ordinary agent detection.
 | `active` | `working` |
 | `idle`, after a turn this extension saw finish | `done` |
 | `idle` | `idle` |
-| `systemError` | `idle`, reason "Thread failed" |
+| `systemError` | `error`, reason "Thread failed" |
+
+Failure reporting requires a Rozi build that supports the `error` agent state.
 
 Codex unloads an idle thread from its background server soon after its turn ends. A thread this
 extension saw finish stays listed as `done` after that, until a Codex pane has shown it and you
