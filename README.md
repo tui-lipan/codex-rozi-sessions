@@ -46,10 +46,13 @@ detects Codex in it and can read its foreground process.
 
 The thread a client shows is the one Codex names in the pane's title (`<thread name> | <project>`
 by default), when exactly one listed thread has that name. Failing that, it is the thread this
-extension last switched the client to. That thread is the first row and the active one. Every
-other loaded thread is listed after it, oldest first, each with the directory it works in, so rozi
-groups it by that directory's project and branch. A thread another Codex pane shows is listed in
-that pane instead.
+extension last switched the client to. That thread is the active row. Rows are ordered by when each
+thread was created, whichever one is on screen, so switching never moves a row. Each shows the
+directory its thread works in, so rozi groups it by that directory's project and branch. A thread
+another Codex pane shows is listed in that pane instead.
+
+Rows follow a switch made in Codex itself, with `/resume` or its thread picker, within about half
+a second, since the extension watches the pane's title between polls.
 
 Sub-agents are left out; they belong to their parent's turn. So are side conversations and the
 blank thread a client opens before your first prompt. A client with only one thread listed publishes

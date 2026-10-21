@@ -34,7 +34,9 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.4"
+VERSION = "0.1.5"
+# How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
+TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
 SOCKET_TIMEOUT = 5.0
 # How long to wait for Codex to show the selected thread after `/resume`.
@@ -320,9 +322,10 @@ def classify(
 
 
 def listed_threads(host: Host, hosts: list[Host], threads: list[Thread], scope: str) -> list[Thread]:
-    """The threads one Codex pane lists: the one it shows, then the others, oldest first.
+    """The threads one Codex pane lists, oldest first.
 
-    A thread another Codex pane shows is listed there instead."""
+    The order does not follow the thread on screen, so switching never moves a row: rozi names a
+    pane's rows by position. A thread another Codex pane shows is listed there instead."""
     elsewhere = {other.active for other in hosts if other is not host and other.active}
     listed = [
         thread
@@ -335,7 +338,7 @@ def listed_threads(host: Host, hosts: list[Host], threads: list[Thread], scope: 
             or is_under(thread.cwd, host.pane.cwd)
         )
     ]
-    listed.sort(key=lambda thread: (thread.thread_id != host.active, thread.created_at, thread.thread_id))
+    listed.sort(key=lambda thread: (thread.created_at, thread.thread_id))
     return listed
 
 
@@ -856,6 +859,8 @@ class SessionsService:
         self.hosts: dict[int, Host] = {}
         # Every thread the last poll could list, by id, for resolving a row activation.
         self.known: dict[str, Thread] = {}
+        # The thread names each Codex pane's title carried when last read, to notice a switch.
+        self.titles: dict[int, frozenset[str]] | None = None
         self.observed = Observed()
         self.next_token = 1
         self.reported_error: str | None = None
@@ -993,15 +998,33 @@ class SessionsService:
         except SessionsError as error:
             self.report(str(error))
 
+    def title_changed(self) -> bool:
+        """Whether a Codex pane's title now names another thread than at the last look.
+
+        Codex retitles the pane as soon as it switches threads, long before the next poll. The
+        spinner in front of the name is not part of the comparison."""
+        try:
+            panes = self.cli.panes()
+        except SessionsError:
+            return False
+        titles = {
+            pane.pane_id: frozenset(title_names(pane.title)) for pane in panes if pane.runs_codex()
+        }
+        changed = self.titles is not None and titles != self.titles
+        self.titles = titles
+        return changed
+
     def run(self) -> int:
         while True:
             self.poll_once()
             deadline = time.monotonic() + self.settings.poll_seconds
             while (remaining := deadline - time.monotonic()) > 0:
                 try:
-                    message = self.messages.get(timeout=remaining)
+                    message = self.messages.get(timeout=min(remaining, TITLE_INTERVAL))
                 except queue.Empty:
-                    break
+                    if self.title_changed():
+                        break
+                    continue
                 if not self.handle(message):
                     return 0
 

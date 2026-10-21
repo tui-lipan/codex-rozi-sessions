@@ -163,13 +163,14 @@ class HostTests(unittest.TestCase):
         memory[3].last_target = "gone"
         self.assertIsNone(cs.classify([pane(3, title="rozi")], threads, memory)[0].active)
 
-    def test_rows_list_the_shown_thread_first_then_the_others_oldest_first(self):
+    def test_rows_are_oldest_first_whichever_thread_is_shown(self):
         threads = [thread("new", name="new", created=30), thread("old", name="old", created=10),
                    thread("work", name="work", created=20), thread("child", parent="work")]
-        host = cs.Host(pane(), "work")
-        rows = cs.host_rows(host, [host], threads, "all", {"old"})
-        self.assertEqual([(row["id"], row["active"], row["status"]) for row in rows],
-                         [("work", True, "idle"), ("old", False, "done"), ("new", False, "idle")])
+        for shown, expected in [("work", [("old", False, "done"), ("work", True, "idle"), ("new", False, "idle")]),
+                                ("new", [("old", False, "done"), ("work", False, "idle"), ("new", True, "idle")])]:
+            host = cs.Host(pane(), shown)
+            rows = cs.host_rows(host, [host], threads, "all", {"old"})
+            self.assertEqual([(row["id"], row["active"], row["status"]) for row in rows], expected)
 
     def test_a_thread_shown_in_another_pane_is_listed_only_there(self):
         threads = [thread("a", name="a"), thread("b", name="b"), thread("c", name="c")]
@@ -444,6 +445,22 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([(row["id"], row["active"]) for row in published[0][1]],
                          [("a", True), ("b", False)])
 
+    def test_a_retitled_pane_is_noticed_but_a_spinner_is_not(self):
+        class TitleCli:
+            title = "⠋ work | rozi"
+
+            def panes(self):
+                return [pane(3, title=self.title), cs.Pane(4, None, "bash", None, 9, None)]
+
+        cli = TitleCli()
+        service = cs.SessionsService(cs.Settings(), cli)
+        self.assertFalse(service.title_changed())
+        cli.title = "⠙ work | rozi"
+        self.assertFalse(service.title_changed())
+        cli.title = "other | rozi"
+        self.assertTrue(service.title_changed())
+        self.assertFalse(service.title_changed())
+
     def test_activating_a_row_no_longer_listed_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
         service = cs.SessionsService(cs.Settings(), cli)
@@ -477,7 +494,7 @@ class ServiceTests(unittest.TestCase):
         cli.title = "other | rozi"
         service.poll()
         self.assertEqual([(row["id"], row["active"]) for row in published[-1]],
-                         [("b", True), ("a", False)])
+                         [("a", False), ("b", True)])
         cli.title = "work | rozi"
         service.poll()
         self.assertEqual(published[-1], [])
