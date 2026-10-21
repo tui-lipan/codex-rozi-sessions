@@ -326,6 +326,22 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(memory.last_target, "b")
         self.assertEqual(cli.notes, [])
 
+    def test_switch_while_current_thread_is_working(self):
+        command = cs.resume_command("b")
+        for working_footer, daemon_active in [(True, False), (False, True), (True, True)]:
+            with self.subTest(working_footer=working_footer, daemon_active=daemon_active):
+                threads = [thread("a", name="work", status="active" if daemon_active else "idle"),
+                           THREADS[1]]
+                cli = FakeCli(threads, [composer_frame(working=working_footer),
+                                       composer_frame(command, working=working_footer)],
+                              ["other | rozi"])
+                switched, memory = self.switch(cli)
+                self.assertTrue(switched)
+                self.assertEqual(cli.typed, [(3, command)])
+                self.assertEqual(cli.pressed, [(3, "Enter")])
+                self.assertEqual(memory.last_target, "b")
+                self.assertEqual(cli.notes, [])
+
     def test_selecting_the_shown_thread_does_nothing(self):
         cli = FakeCli(THREADS, [composer_frame()])
         self.assertTrue(self.switch(cli, target="a")[0])
@@ -334,8 +350,6 @@ class SwitchTests(unittest.TestCase):
     def test_refusals_never_type(self):
         cases = [
             (THREADS, composer_frame("draft"), "unsent text"),
-            (THREADS, composer_frame(working=True), "still working"),
-            ([thread("a", name="work", status="active"), THREADS[1]], composer_frame(), "still working"),
             (THREADS, approval_frame(), "approval"),
         ]
         for threads, frame, message in cases:
@@ -359,11 +373,12 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(cli.pressed, [])
         self.assertIn("not sent", cli.notes[0][0])
 
-    def test_a_turn_starting_before_enter_stops_the_switch(self):
+    def test_a_turn_starting_before_enter_allows_the_switch(self):
         command = cs.resume_command("b")
-        cli = FakeCli(THREADS, [composer_frame(), composer_frame(command, working=True)])
-        self.assertFalse(self.switch(cli)[0])
-        self.assertEqual(cli.pressed, [])
+        cli = FakeCli(THREADS, [composer_frame(), composer_frame(command, working=True)],
+                      ["other | rozi"])
+        self.assertTrue(self.switch(cli)[0])
+        self.assertEqual(cli.pressed, [(3, "Enter")])
 
     def test_codex_refusal_is_quoted(self):
         command = cs.resume_command("b")

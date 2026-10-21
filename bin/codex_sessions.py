@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 COMMAND_TIMEOUT = 5.0
 SOCKET_TIMEOUT = 5.0
 # How long to wait for Codex to show the selected thread after `/resume`.
@@ -425,16 +425,13 @@ class Refusal:
     message: str
 
 
-def switch_refusal(screen: Screen, current: Thread | None) -> Refusal | None:
+def switch_refusal(screen: Screen) -> Refusal | None:
     """Why typing into the client now could lose or misdirect something, if it could."""
     if screen.composer is None:
         return Refusal(
             "Codex is showing an approval, a question, or a list. Answer or close it, then select "
             "the row again."
         )
-    if screen.working or (current is not None and current.is_working()):
-        # Codex refuses `/resume` while a turn runs, and would leave the command in the prompt.
-        return Refusal("Codex is still working. Select the row again once the turn finishes.")
     if screen.draft:
         return Refusal(
             "Codex's prompt has unsent text. Send or clear it, then select the row again."
@@ -729,7 +726,7 @@ def switch(
     """Put the Codex pane's client on `target`, or say why not. `/resume` also opens a thread
     Codex has unloaded since it was listed.
 
-    Never types into a prompt that holds anything or while a turn runs. Reads the typed command
+    Never types into a prompt that holds unsent text or shows a dialog. Reads the typed command
     back right before Enter, and reports success only once Codex names the target. Returns whether
     it did."""
     pane_id = host.pane.pane_id
@@ -737,8 +734,7 @@ def switch(
         return True
     threads = {thread.thread_id: thread for thread in cli.threads()}
     threads.setdefault(target.thread_id, target)
-    current = threads.get(host.active) if host.active else None
-    refusal = switch_refusal(cli.screen(pane_id), current)
+    refusal = switch_refusal(cli.screen(pane_id))
     if refusal is not None:
         cli.notify(refusal.message, error=True)
         return False
@@ -748,11 +744,11 @@ def switch(
     # Codex redraws its prompt, and opens its slash-command hints, a moment after the keys land.
     for attempt in range(VERIFY_ATTEMPTS):
         typed = cli.screen(pane_id)
-        if prompt_holds(typed, command) and not typed.working:
+        if prompt_holds(typed, command):
             break
         if attempt + 1 < VERIFY_ATTEMPTS:
             sleep(VERIFY_INTERVAL)
-    if not prompt_holds(typed, command) or typed.working:
+    if not prompt_holds(typed, command):
         cli.notify(
             "Could not confirm the switch command in Codex's prompt, so it was not sent. "
             "Check the prompt before pressing Enter.",

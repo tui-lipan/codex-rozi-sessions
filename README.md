@@ -82,13 +82,12 @@ that row shows the hooks' live state while every other row stays listed.
 Selecting a row focuses the pane, and then this extension switches the client to that thread. It
 types `/resume <thread-id>` into Codex's prompt, reads it back from the screen, and only then
 presses Enter. The thread you leave stays listed while Codex keeps it loaded. A thread Codex has
-already unloaded is loaded again.
+already unloaded is loaded again. You can switch while the current thread is working.
 
 The extension does not switch, and says why in a rozi notification, when:
 
 - Codex's prompt holds unsent text. Codex's dim placeholder does not count.
 - Codex is showing an approval, a question, a list, or any screen without its prompt.
-- A turn is still running in the thread on screen. Codex refuses `/resume` until it ends.
 - The selected thread is no longer listed.
 
 If the command does not read back exactly, for example because someone typed at the same moment,

@@ -22,9 +22,8 @@ Python service.
   private state files, and never start the Codex daemon.
 - Only read from the daemon. Never call a method that changes a thread, its settings, or the
   daemon.
-- Never type into Codex's prompt unless the screen shows an empty prompt, no dialog, and no
-  running turn, and the daemon reports the shown thread as not active. Read the typed command back
-  before pressing Enter.
+- Never type into Codex's prompt unless the screen shows an empty prompt and no dialog.
+  `/resume` is allowed while a turn runs. Read the typed command back before pressing Enter.
 - Keep the service standard-library Python 3 with no third-party dependencies.
 - A published row status must be `working`, `idle`, `blocked`, `done`, or `error`; rozi reads
   any other status word as a live run.
