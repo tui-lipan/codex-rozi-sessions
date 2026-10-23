@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
@@ -185,6 +185,8 @@ class Pane:
     agent: str | None
     foreground_pid: int | None
     title: str | None
+    # The thread the pane's Codex hooks last reported, from rozi releases that say.
+    session: str | None = None
 
     @classmethod
     def from_wire(cls, value: object) -> Pane | None:
@@ -200,6 +202,7 @@ class Pane:
             agent=text(value.get("agent")),
             foreground_pid=integer(value.get("foreground_pid")),
             title=text(value.get("title")),
+            session=text(value.get("agent_session")),
         )
 
     def runs_codex(self) -> bool:
@@ -307,6 +310,10 @@ class Host:
 def classify(
     panes: list[Pane], threads: list[Thread], memory: dict[int, HostMemory]
 ) -> list[Host]:
+    """The Codex panes, each with the thread it shows when that can be told: from a title naming
+    exactly one thread, which follows a switch at once; else from the thread Codex's hooks last
+    reported, which also names a new thread before Codex has named it; else from the last switch
+    this service made."""
     hosts = []
     listable = [thread for thread in threads if thread.is_listable()]
     loaded = {thread.thread_id for thread in listable}
@@ -315,41 +322,74 @@ def classify(
             continue
         active = shown_thread(pane.title, listable)
         remembered = memory.get(pane.pane_id, HostMemory()).last_target
-        if active is None and remembered in loaded:
-            active = remembered
+        for fallback in (pane.session, remembered):
+            if active is None and fallback in loaded:
+                active = fallback
         hosts.append(Host(pane=pane, active=active))
     return hosts
 
 
-def listed_threads(host: Host, hosts: list[Host], threads: list[Thread], scope: str) -> list[Thread]:
-    """The threads one Codex pane lists, oldest first.
+def assign_owners(
+    hosts: list[Host], threads: list[Thread], owners: dict[str, int], scope: str
+) -> dict[str, int]:
+    """The one Codex pane each listable thread is published in.
+
+    Every client lists the daemon's threads, so a thread published by each pane it could belong
+    to would appear once per pane. A thread belongs to the pane that shows it, then to the pane it
+    last belonged to, so it stays put while a title cannot be read for a moment and after the
+    client moves on to another thread. A thread no pane has claimed yet goes to the pane working
+    nearest above its directory, the lowest pane on a tie; with `scope = "all"`, to the lowest
+    pane when none contains it."""
+    by_pane = {host.pane.pane_id: host for host in hosts}
+    shown: dict[str, int] = {}
+    for host in sorted(hosts, key=lambda host: host.pane.pane_id):
+        if host.active:
+            shown.setdefault(host.active, host.pane.pane_id)
+    assigned = {}
+    for thread in threads:
+        if not thread.is_listable():
+            continue
+        owner = shown.get(thread.thread_id)
+        if owner is None and owners.get(thread.thread_id) in by_pane:
+            owner = owners[thread.thread_id]
+        if owner is None:
+            owner = nearest_pane(thread, hosts, scope)
+        if owner is not None:
+            assigned[thread.thread_id] = owner
+    return assigned
+
+
+def nearest_pane(thread: Thread, hosts: list[Host], scope: str) -> int | None:
+    containing = [host for host in hosts if is_under(thread.cwd, host.pane.cwd)]
+    if containing:
+        nearest = min(
+            containing,
+            key=lambda host: (-len(os.path.normpath(host.pane.cwd or "")), host.pane.pane_id),
+        )
+        return nearest.pane.pane_id
+    if scope == "all" and hosts:
+        return min(host.pane.pane_id for host in hosts)
+    return None
+
+
+def listed_threads(host: Host, threads: list[Thread], owners: dict[str, int]) -> list[Thread]:
+    """The threads one Codex pane owns, oldest first.
 
     The order does not follow the thread on screen, so switching never moves a row: rozi names a
-    pane's rows by position. A thread another Codex pane shows is listed there instead."""
-    elsewhere = {other.active for other in hosts if other is not host and other.active}
-    listed = [
-        thread
-        for thread in threads
-        if thread.is_listable()
-        and thread.thread_id not in elsewhere
-        and (
-            thread.thread_id == host.active
-            or scope == "all"
-            or is_under(thread.cwd, host.pane.cwd)
-        )
-    ]
+    pane's rows by position."""
+    listed = [thread for thread in threads if owners.get(thread.thread_id) == host.pane.pane_id]
     listed.sort(key=lambda thread: (thread.created_at, thread.thread_id))
     return listed
 
 
 def host_rows(
-    host: Host, hosts: list[Host], threads: list[Thread], scope: str, finished: set[str]
+    host: Host, threads: list[Thread], owners: dict[str, int], finished: set[str]
 ) -> list[dict[str, object]]:
     """The rows a Codex pane publishes, or none when it has nothing a single row could not say.
 
-    A client with only one thread loaded is one agent, which rozi already shows; the hooks or
+    A client that owns only one thread is one agent, which rozi already shows; the hooks or
     screen detection speak for it better than a two-second poll."""
-    listed = listed_threads(host, hosts, threads, scope)
+    listed = listed_threads(host, threads, owners)
     if len(listed) < 2:
         return []
     return [
@@ -857,6 +897,8 @@ class SessionsService:
         self.publishers: dict[int, Publisher] = {}
         self.memory: dict[int, HostMemory] = {}
         self.hosts: dict[int, Host] = {}
+        # The pane each thread is published in, kept between polls; see `assign_owners`.
+        self.owners: dict[str, int] = {}
         # Every thread the last poll could list, by id, for resolving a row activation.
         self.known: dict[str, Thread] = {}
         # The thread names each Codex pane's title carried when last read, to notice a switch.
@@ -942,8 +984,9 @@ class SessionsService:
         for pane_id in set(self.memory) - set(self.hosts):
             del self.memory[pane_id]
         finished = set(self.observed.finished)
+        self.owners = assign_owners(hosts, threads, self.owners, self.settings.scope)
         for host in hosts:
-            rows = host_rows(host, hosts, threads, self.settings.scope, finished)
+            rows = host_rows(host, threads, self.owners, finished)
             self.publish(host.pane.pane_id, rows)
 
     def activate(self, pane_id: int, row_id: str) -> None:

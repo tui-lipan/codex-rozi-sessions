@@ -45,18 +45,28 @@ it has loaded, every two seconds, and reads rozi's pane list. A pane is a Codex 
 detects Codex in it and can read its foreground process.
 
 The thread a client shows is the one Codex names in the pane's title (`<thread name> | <project>`
-by default), when exactly one listed thread has that name. Failing that, it is the thread this
-extension last switched the client to. That thread is the active row. Rows are ordered by when each
-thread was created, whichever one is on screen, so switching never moves a row. Each shows the
-directory its thread works in, so rozi groups it by that directory's project and branch. A thread
-another Codex pane shows is listed in that pane instead.
+by default), when exactly one listed thread has that name. Failing that, it is the thread rozi's
+Codex plugin last reported for the pane, which also covers a new thread before Codex has named it,
+and then the thread this extension last switched the client to. That thread is the active row. Rows
+are ordered by when each thread was created, whichever one is on screen, so switching never moves a
+row. Each shows the directory its thread works in, so rozi groups it by that directory's project
+and branch.
+
+Every client sees all of the background server's threads, but each thread is listed in one pane
+only:
+
+1. The pane that shows it.
+2. Otherwise the pane it was last listed in, while that pane still runs Codex. A thread you leave,
+   or one that keeps running in the background, stays with the client it came from.
+3. Otherwise the Codex pane working nearest above the thread's directory, the lowest pane number on
+   a tie. With `scope = "all"`, a thread no pane's directory contains goes to the lowest pane.
 
 Rows follow a switch made in Codex itself, with `/resume` or its thread picker, within about half
 a second, since the extension watches the pane's title between polls.
 
 Sub-agents are left out; they belong to their parent's turn. So are side conversations and the
-blank thread a client opens before your first prompt. A client with only one thread listed publishes
-no rows, and is left to rozi's ordinary agent detection.
+blank thread a client opens before your first prompt. A client with only one thread listed in its
+pane publishes no rows, and is left to rozi's ordinary agent detection.
 
 | Codex reports | Row status |
 | --- | --- |
@@ -113,9 +123,9 @@ scope = "all"       # or "cwd"
 switching = true    # false: never type into Codex
 ```
 
-With `scope = "all"`, a pane lists every loaded thread, including threads opened from the Codex
-app or IDE extension, which share the same background server. With `scope = "cwd"`, it lists the
-thread it shows and threads working in or below the pane's directory.
+With `scope = "all"`, every loaded thread is listed in some Codex pane, including threads opened
+from the Codex app or IDE extension, which share the same background server. With `scope = "cwd"`,
+a thread no pane has shown is listed only in a pane whose directory contains it.
 
 ## Limits
 
