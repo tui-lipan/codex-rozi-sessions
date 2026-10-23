@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from unittest import mock
 from pathlib import Path
 from unittest.mock import patch
@@ -169,28 +170,87 @@ class HostTests(unittest.TestCase):
         for shown, expected in [("work", [("old", False, "done"), ("work", True, "idle"), ("new", False, "idle")]),
                                 ("new", [("old", False, "done"), ("work", False, "idle"), ("new", True, "idle")])]:
             host = cs.Host(pane(), shown)
-            rows = cs.host_rows(host, [host], threads, "all", {"old"})
+            rows = rows_by_pane([host], threads, finished={"old"})[3]
             self.assertEqual([(row["id"], row["active"], row["status"]) for row in rows], expected)
 
     def test_a_thread_shown_in_another_pane_is_listed_only_there(self):
-        threads = [thread("a", name="a"), thread("b", name="b"), thread("c", name="c")]
+        threads = [thread("a", name="a"), thread("b", name="b"), thread("c", name="c"),
+                   thread("d", name="d")]
         first, second = cs.Host(pane(1), "a"), cs.Host(pane(2), "b")
-        self.assertEqual([row["id"] for row in cs.host_rows(first, [first, second], threads, "all", set())],
-                         ["a", "c"])
-        self.assertEqual([row["id"] for row in cs.host_rows(second, [first, second], threads, "all", set())],
-                         ["b", "c"])
+        owners = {"d": 2}
+        self.assertEqual(published_ids(rows_by_pane([first, second], threads, owners=owners)),
+                         {1: ["a", "c"], 2: ["b", "d"]})
+
+    def test_every_thread_is_published_by_one_pane_only(self):
+        """Three clients, each on its own thread, and a finished one none of them shows: rozi
+        numbers a thread that every pane publishes as three runs of one task."""
+        threads = [thread("done", name="Update README", cwd="/home/x/other", created=1),
+                   thread("a", name="a", created=2), thread("b", name="b", created=3),
+                   thread("c", name="c", created=4)]
+        hosts = [cs.Host(pane(2), "a"), cs.Host(pane(3), "b"), cs.Host(pane(4), "c")]
+        published = published_ids(rows_by_pane(hosts, threads, finished={"done"}))
+        self.assertEqual(published, {2: ["done", "a"], 3: [], 4: []})
+
+    def test_an_unshown_thread_goes_to_the_pane_nearest_above_it(self):
+        threads = [thread("a", name="a"), thread("b", name="b"),
+                   thread("deep", name="deep", cwd="/home/x/rozi/tree")]
+        hosts = [cs.Host(pane(1, cwd="/home/x"), "a"), cs.Host(pane(2, cwd="/home/x/rozi"), "b")]
+        self.assertEqual(cs.assign_owners(hosts, threads, {}, "all")["deep"], 2)
+        far = thread("far", name="far", cwd="/srv")
+        self.assertEqual(cs.assign_owners(hosts, threads + [far], {}, "all")["far"], 1)
+        self.assertNotIn("far", cs.assign_owners(hosts, threads + [far], {}, "cwd"))
+
+    def test_a_pane_keeps_its_threads_while_its_title_cannot_be_read(self):
+        threads = [thread("a", name="a", created=1), thread("a2", name="a2", created=2),
+                   thread("b", name="b", created=3), thread("b2", name="b2", created=4)]
+        owners = cs.assign_owners([cs.Host(pane(1), "a"), cs.Host(pane(2), "b")], threads,
+                                  {"a2": 1, "b2": 2}, "all")
+        # A prompt was just sent: pane 1's title names no thread for a poll.
+        blind = [cs.Host(pane(1), None), cs.Host(pane(2), "b")]
+        owners = cs.assign_owners(blind, threads, owners, "all")
+        self.assertEqual(owners, {"a": 1, "a2": 1, "b": 2, "b2": 2})
+
+    def test_a_closed_pane_hands_its_threads_to_one_other(self):
+        threads = [thread("a", name="a"), thread("a2", name="a2"), thread("b", name="b")]
+        owners = {"a": 1, "a2": 1, "b": 2}
+        hosts = [cs.Host(pane(2), "b"), cs.Host(pane(3), None)]
+        self.assertEqual(cs.assign_owners(hosts, threads, owners, "all"),
+                         {"a": 2, "a2": 2, "b": 2})
+
+    def test_hooks_name_a_thread_codex_has_not_named_yet(self):
+        threads = [thread("a", name="a"), thread("fresh", name=None, preview="fix the bug")]
+        hooked = replace(pane(4, title="rozi"), session="fresh")
+        self.assertEqual(cs.classify([hooked], threads, {})[0].active, "fresh")
+        # The title, which follows a `/resume` at once, outranks a report from before it.
+        titled = replace(hooked, title="a | rozi")
+        self.assertEqual(cs.classify([titled], threads, {})[0].active, "a")
+
+    def test_list_panes_carries_the_hooks_thread(self):
+        value = {"id": 4, "foreground_pid": 9, "agent": "codex", "agent_session": "t-1"}
+        self.assertEqual(cs.Pane.from_wire(value).session, "t-1")
+        self.assertIsNone(cs.Pane.from_wire({"id": 4}).session)
 
     def test_a_lone_thread_publishes_no_rows(self):
         host = cs.Host(pane(), "a")
-        self.assertEqual(cs.host_rows(host, [host], [thread("a"), thread("blank", name=None, preview="")],
-                                      "all", set()), [])
+        threads = [thread("a"), thread("blank", name=None, preview="")]
+        self.assertEqual(rows_by_pane([host], threads), {3: []})
 
     def test_cwd_scope_keeps_the_shown_thread_and_threads_below_the_pane(self):
         threads = [thread("a", cwd="/elsewhere"), thread("b", cwd="/home/x/rozi/sub"),
                    thread("c", cwd="/home/x/rozi-other")]
         host = cs.Host(pane(cwd="/home/x/rozi"), "a")
-        self.assertEqual([row["id"] for row in cs.host_rows(host, [host], threads, "cwd", set())],
-                         ["a", "b"])
+        self.assertEqual(published_ids(rows_by_pane([host], threads, scope="cwd")), {3: ["a", "b"]})
+        self.assertEqual(published_ids(rows_by_pane([host], threads, scope="all")),
+                         {3: ["a", "b", "c"]})
+
+
+def rows_by_pane(hosts, threads, *, scope="all", finished=frozenset(), owners=None):
+    owners = cs.assign_owners(hosts, threads, owners or {}, scope)
+    return {host.pane.pane_id: cs.host_rows(host, threads, owners, set(finished)) for host in hosts}
+
+
+def published_ids(rows):
+    return {pane_id: [row["id"] for row in value] for pane_id, value in rows.items()}
 
 
 class ObservedTests(unittest.TestCase):
@@ -498,6 +558,40 @@ class ServiceTests(unittest.TestCase):
         cli.title = "work | rozi"
         service.poll()
         self.assertEqual(published[-1], [])
+
+    def test_three_clients_publish_a_finished_background_thread_once(self):
+        class PollCli:
+            def __init__(self):
+                self.thread_list = [thread("a", name="a", created=2), thread("b", name="b", created=3),
+                                    thread("c", name="c", created=4),
+                                    thread("bg", name="Update README", status="active", created=1)]
+                self.titles = {2: "a | rozi", 3: "b | rozi", 4: "c | rozi"}
+
+            def threads(self):
+                return self.thread_list
+
+            def panes(self):
+                return [pane(pane_id, title=title) for pane_id, title in self.titles.items()]
+
+        cli = PollCli()
+        service = cs.SessionsService(cs.Settings(), cli)
+        published = {}
+        service.publish = lambda pane_id, rows: published.__setitem__(pane_id, rows)
+
+        def listings(thread_id):
+            return [pane_id for pane_id, rows in published.items()
+                    if any(row["id"] == thread_id for row in rows)]
+
+        service.poll()
+        # The background turn ends and Codex unloads it; a prompt in pane 4 blanks its title.
+        cli.thread_list = cli.thread_list[:3]
+        cli.titles[4] = "rozi"
+        service.poll()
+        self.assertEqual(listings("bg"), [2])
+        self.assertEqual(listings("c"), [])
+        cli.titles[4] = "c | rozi"
+        service.poll()
+        self.assertEqual(listings("bg"), [2])
 
     def test_switching_disabled_only_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
