@@ -225,6 +225,17 @@ class HostTests(unittest.TestCase):
         titled = replace(hooked, title="a | rozi")
         self.assertEqual(cs.classify([titled], threads, {})[0].active, "a")
 
+    def test_hooks_tell_threads_sharing_the_titled_name_apart(self):
+        threads = [thread("a", name="twin"), thread("b", name="twin"), thread("c", name="other")]
+        hooked = replace(pane(4, title="twin | rozi"), session="b")
+        self.assertEqual(cs.classify([hooked], threads, {})[0].active, "b")
+        # A report or switch naming a thread the title rules out is from before a `/resume`.
+        stale = replace(hooked, session="c")
+        memory = {4: cs.HostMemory(last_target="c")}
+        self.assertIsNone(cs.classify([stale], threads, memory)[0].active)
+        memory[4].last_target = "a"
+        self.assertEqual(cs.classify([stale], threads, memory)[0].active, "a")
+
     def test_list_panes_carries_the_hooks_thread(self):
         value = {"id": 4, "foreground_pid": 9, "agent": "codex", "agent_session": "t-1"}
         self.assertEqual(cs.Pane.from_wire(value).session, "t-1")

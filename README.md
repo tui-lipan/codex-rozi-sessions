@@ -47,7 +47,8 @@ detects Codex in it and can read its foreground process.
 The thread a client shows is the one Codex names in the pane's title (`<thread name> | <project>`
 by default), when exactly one listed thread has that name. Failing that, it is the thread rozi's
 Codex plugin last reported for the pane, which also covers a new thread before Codex has named it,
-and then the thread this extension last switched the client to. That thread is the active row. Rows
+and then the thread this extension last switched the client to. When several threads share the
+name in the title, only one of them is taken. That thread is the active row. Rows
 are ordered by when each thread was created, whichever one is on screen, so switching never moves a
 row. Each shows the directory its thread works in, so rozi groups it by that directory's project
 and branch.
@@ -135,8 +136,10 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
   to another machine's background server, so those panes are left alone.
 - **Clients run with `--no-daemon`** keep their threads to themselves; their panes list nothing.
 - **The active row** comes from the thread name in the pane's title. A thread without a name yet,
-  two threads with the same name, or a `/title` setup that hides the thread name makes it
-  ambiguous; the last switch made here is used instead.
+  two threads with the same name, which Codex gives to threads started with similar prompts, or a
+  `/title` setup that hides the thread name makes it ambiguous. Install rozi's Codex hook plugin to
+  resolve those cases; without it only the last switch made here can, and when nothing does, no
+  row is active and `rozi agents prompt` and `read` refuse to target any of the pane's threads.
 - The extension reads the background server through Codex's app-server protocol, which Codex
   marks experimental. A Codex release that changes it shows up as no rows, not as wrong ones.
 - Switching reads Codex's screen. A future Codex release that redraws its prompt differently makes

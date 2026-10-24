@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.6"
+VERSION = "0.1.7"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
@@ -284,11 +284,16 @@ def title_names(title: str | None) -> list[str]:
     return [name for part in title.split(TITLE_SEPARATOR) if (name := SPINNER.sub("", part).strip())]
 
 
+def titled_threads(title: str | None, threads: list[Thread]) -> list[str]:
+    """The threads whose name the title carries."""
+    names = set(title_names(title))
+    return [thread.thread_id for thread in threads if thread.name and thread.name in names]
+
+
 def shown_thread(title: str | None, threads: list[Thread]) -> str | None:
     """The thread whose name the title carries, when exactly one listed thread has that name."""
-    names = set(title_names(title))
-    matches = [thread for thread in threads if thread.name and thread.name in names]
-    return matches[0].thread_id if len(matches) == 1 else None
+    matches = titled_threads(title, threads)
+    return matches[0] if len(matches) == 1 else None
 
 
 def is_under(path: str | None, root: str | None) -> bool:
@@ -312,18 +317,23 @@ def classify(
 ) -> list[Host]:
     """The Codex panes, each with the thread it shows when that can be told: from a title naming
     exactly one thread, which follows a switch at once; else from the thread Codex's hooks last
-    reported, which also names a new thread before Codex has named it; else from the last switch
-    this service made."""
+    reported, which also names a new thread before Codex has named it and tells threads sharing a
+    name apart; else from the last switch this service made.
+
+    When the title names several threads, only one of those can be on screen, so a hook report or
+    switch from before a `/resume` to another of them is not taken for it."""
     hosts = []
     listable = [thread for thread in threads if thread.is_listable()]
     loaded = {thread.thread_id for thread in listable}
     for pane in panes:
         if not pane.runs_codex():
             continue
-        active = shown_thread(pane.title, listable)
+        titled = titled_threads(pane.title, listable)
+        active = titled[0] if len(titled) == 1 else None
+        candidates = set(titled) or loaded
         remembered = memory.get(pane.pane_id, HostMemory()).last_target
         for fallback in (pane.session, remembered):
-            if active is None and fallback in loaded:
+            if active is None and fallback in candidates:
                 active = fallback
         hosts.append(Host(pane=pane, active=active))
     return hosts
