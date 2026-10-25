@@ -65,10 +65,9 @@ def thread(
     )
 
 
-def pane(pane_id: int = 3, title: str | None = "⠋ work | rozi", pid: int | None = 500,
-         program: str = "codex", cwd: str = "/home/x/rozi"):
-    return cs.Pane(pane_id=pane_id, cwd=cwd, program=program, agent="codex",
-                   foreground_pid=pid, title=title)
+def pane(pane_id: int = 3, title: str | None = "⠋ work | rozi", program: str = "codex",
+         cwd: str = "/home/x/rozi"):
+    return cs.Pane(pane_id=pane_id, cwd=cwd, program=program, agent="codex", title=title)
 
 
 def composer_frame(typed: str = "", *, placeholder: bool = True, working: bool = False,
@@ -151,10 +150,9 @@ class HostTests(unittest.TestCase):
         self.assertIsNone(cs.shown_thread("twin | rozi", threads))
         self.assertIsNone(cs.shown_thread("rozi", threads))
 
-    def test_remote_and_other_panes_are_not_codex_clients(self):
+    def test_other_panes_are_not_codex_clients(self):
         threads = [thread("a")]
-        panes = [pane(1), pane(2, pid=None), cs.Pane(3, None, "bash", None, 9, None),
-                 cs.Pane(4, None, "node", "codex", 9, None)]
+        panes = [pane(1), cs.Pane(3, None, "bash", None, None), cs.Pane(4, None, "node", "codex", None)]
         self.assertEqual([host.pane.pane_id for host in cs.classify(panes, threads, {})], [1, 4])
 
     def test_last_switch_stands_in_for_an_unreadable_title(self):

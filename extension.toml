@@ -2,9 +2,9 @@
 id = "codex-rozi-sessions"
 title = "Codex threads"
 description = "One Activity row per Codex thread loaded in its background server, grouped by worktree; selecting a row switches Codex to it"
-version = "0.2.0"
+version = "0.3.0"
 api = 1
-min_rozi = "0.0.30"
+min_rozi = "0.0.33"
 homepage = "https://github.com/tui-lipan/codex-rozi-sessions"
 
 # Defaults. Override them in [extensions.codex-rozi-sessions] in config.toml.
@@ -22,5 +22,7 @@ switching = true
 
 [[services]]
 name = "watch"
-exec = ["python3", "{extension_dir}/bin/codex_sessions.py"]
+exec = ["python3", "./bin/codex_sessions.py"]
+# Beside each session's Codex background server, which a client on another machine cannot reach.
+placement = "each-host"
 restart = "on-failure"
