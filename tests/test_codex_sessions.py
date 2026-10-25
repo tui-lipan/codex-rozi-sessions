@@ -189,7 +189,7 @@ class HostTests(unittest.TestCase):
                    thread("c", name="c", created=4)]
         hosts = [cs.Host(pane(2), "a"), cs.Host(pane(3), "b"), cs.Host(pane(4), "c")]
         published = published_ids(rows_by_pane(hosts, threads, finished={"done"}))
-        self.assertEqual(published, {2: ["done", "a"], 3: [], 4: []})
+        self.assertEqual(published, {2: ["done", "a"], 3: ["b"], 4: ["c"]})
 
     def test_an_unshown_thread_goes_to_the_pane_nearest_above_it(self):
         threads = [thread("a", name="a"), thread("b", name="b"),
@@ -236,15 +236,45 @@ class HostTests(unittest.TestCase):
         memory[4].last_target = "a"
         self.assertEqual(cs.classify([stale], threads, memory)[0].active, "a")
 
+    def test_a_title_carrying_the_thread_id_says_exactly_which_thread_is_shown(self):
+        a = "01a16fd1-20cc-7dc1-90ce-8885b809b462"
+        b = "01a16fd3-38f3-7e21-9acd-8f6e77b0ba46"
+        threads = [thread(a, name="twin"), thread(b, name="twin"),
+                   thread("01a16fd4-0000-7000-8000-000000000000", name=None, preview="")]
+        titled = pane(4, title="⠋ twin | rozi | 01a16fd3-38f3-7e21-9acd-8f6e7...")
+        # Outranks a stale hook report and the last switch.
+        stale = replace(titled, session=a)
+        self.assertEqual(cs.classify([stale], threads, {4: cs.HostMemory(last_target=a)})[0].active, b)
+        self.assertTrue(cs.switch_confirmed(threads[1], titled, threads))
+        self.assertFalse(cs.switch_confirmed(threads[0], titled, threads))
+        # A blank thread too new to list is still the one on screen, so no row is.
+        blank = replace(titled, title="rozi | 01a16fd4-0000-7000-8000-000…", session=a)
+        self.assertEqual(cs.classify([blank], threads, {})[0].active, threads[2].thread_id)
+        self.assertEqual(cs.title_thread_ids("work | rozi"), [])
+        # Hex names are not IDs.
+        self.assertEqual(cs.title_thread_ids("cafebabe | deadbeef-1"), [])
+        # An ID matching nothing loaded leaves no thread on screen, a short prefix still names its
+        # one thread, and a fragment that is no ID falls back to the name and the hooks.
+        unknown = replace(titled, title="twin | 01a16fd9-0000", session=a)
+        self.assertIsNone(cs.classify([unknown], threads, {})[0].active)
+        short = replace(titled, title="twin | 01a16fd1-20cc", session=a)
+        self.assertEqual(cs.classify([short], threads, {})[0].active, a)
+        shared = replace(titled, title="twin | 01a16fd", session=a)
+        self.assertEqual(cs.classify([shared], threads, {})[0].active, a)
+
     def test_list_panes_carries_the_hooks_thread(self):
         value = {"id": 4, "foreground_pid": 9, "agent": "codex", "agent_session": "t-1"}
         self.assertEqual(cs.Pane.from_wire(value).session, "t-1")
         self.assertIsNone(cs.Pane.from_wire({"id": 4}).session)
 
-    def test_a_lone_thread_publishes_no_rows(self):
-        host = cs.Host(pane(), "a")
+    def test_a_lone_thread_is_published_only_while_it_is_on_screen(self):
         threads = [thread("a"), thread("blank", name=None, preview="")]
-        self.assertEqual(rows_by_pane([host], threads), {3: []})
+        rows = rows_by_pane([cs.Host(pane(), "a")], threads)[3]
+        self.assertEqual([(row["id"], row["active"], row["native_session"]) for row in rows],
+                         [("a", True, "a")])
+        # A blank new thread on screen leaves the agent rozi detects there in charge.
+        self.assertEqual(rows_by_pane([cs.Host(pane(), "blank")], threads), {3: []})
+        self.assertEqual(rows_by_pane([cs.Host(pane(), None)], threads), {3: []})
 
     def test_cwd_scope_keeps_the_shown_thread_and_threads_below_the_pane(self):
         threads = [thread("a", cwd="/elsewhere"), thread("b", cwd="/home/x/rozi/sub"),
@@ -568,7 +598,7 @@ class ServiceTests(unittest.TestCase):
                          [("a", False), ("b", True)])
         cli.title = "work | rozi"
         service.poll()
-        self.assertEqual(published[-1], [])
+        self.assertEqual([(row["id"], row["active"]) for row in published[-1]], [("a", True)])
 
     def test_three_clients_publish_a_finished_background_thread_once(self):
         class PollCli:

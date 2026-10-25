@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.1.7"
+VERSION = "0.2.0"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
@@ -53,6 +53,10 @@ WORKING_FOOTER = "esc to interrupt"
 # Codex's terminal title puts a spinner in front of the thread name while a turn runs.
 SPINNER = re.compile(r"^[⠀-⣿\s]+")
 TITLE_SEPARATOR = " | "
+# Codex's `thread-id` title item, which it shortens with an ellipsis. Two UUID groups at least, so
+# a project or thread name that happens to be hex is not taken for one.
+THREAD_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}[0-9a-f-]*")
+ELLIPSIS = ("...", "…")
 # Codex's answers to a `/resume` it did not carry out.
 SWITCH_FAILURES = (
     "No saved chat found",
@@ -284,6 +288,27 @@ def title_names(title: str | None) -> list[str]:
     return [name for part in title.split(TITLE_SEPARATOR) if (name := SPINNER.sub("", part).strip())]
 
 
+def title_thread_ids(title: str | None) -> list[str]:
+    """The thread ID prefixes a title carries once `/title` includes `thread-id`."""
+    prefixes = []
+    for name in title_names(title):
+        for ellipsis in ELLIPSIS:
+            name = name.removesuffix(ellipsis)
+        if THREAD_ID.fullmatch(name):
+            prefixes.append(name)
+    return prefixes
+
+
+def id_shown_thread(prefixes: list[str], threads: list[Thread]) -> str | None:
+    """The one thread whose ID starts with a prefix from the title."""
+    matches = [
+        thread.thread_id
+        for thread in threads
+        if any(thread.thread_id.startswith(prefix) for prefix in prefixes)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def titled_threads(title: str | None, threads: list[Thread]) -> list[str]:
     """The threads whose name the title carries."""
     names = set(title_names(title))
@@ -315,10 +340,12 @@ class Host:
 def classify(
     panes: list[Pane], threads: list[Thread], memory: dict[int, HostMemory]
 ) -> list[Host]:
-    """The Codex panes, each with the thread it shows when that can be told: from a title naming
-    exactly one thread, which follows a switch at once; else from the thread Codex's hooks last
-    reported, which also names a new thread before Codex has named it and tells threads sharing a
-    name apart; else from the last switch this service made.
+    """The Codex panes, each with the thread it shows when that can be told.
+
+    A title carrying the thread ID says so exactly, even for a thread too new to list, which leaves
+    no row on screen. Without one: a title naming exactly one thread, which follows a switch at
+    once; else the thread Codex's hooks last reported, which also names a new thread before Codex
+    has named it and tells threads sharing a name apart; else the last switch this service made.
 
     When the title names several threads, only one of those can be on screen, so a hook report or
     switch from before a `/resume` to another of them is not taken for it."""
@@ -327,6 +354,10 @@ def classify(
     loaded = {thread.thread_id for thread in listable}
     for pane in panes:
         if not pane.runs_codex():
+            continue
+        prefixes = title_thread_ids(pane.title)
+        if prefixes:
+            hosts.append(Host(pane=pane, active=id_shown_thread(prefixes, threads)))
             continue
         titled = titled_threads(pane.title, listable)
         active = titled[0] if len(titled) == 1 else None
@@ -395,12 +426,14 @@ def listed_threads(host: Host, threads: list[Thread], owners: dict[str, int]) ->
 def host_rows(
     host: Host, threads: list[Thread], owners: dict[str, int], finished: set[str]
 ) -> list[dict[str, object]]:
-    """The rows a Codex pane publishes, or none when it has nothing a single row could not say.
+    """The rows a Codex pane publishes.
 
-    A client that owns only one thread is one agent, which rozi already shows; the hooks or
-    screen detection speak for it better than a two-second poll."""
+    A client that owns only one thread gets a row once that thread is known to be on screen: Codex
+    runs a background-server thread's hooks outside the pane, so the row is what tells rozi its
+    state and which conversation a restore resumes. Not before, since a row off screen would hide
+    the agent rozi detects on a blank new thread."""
     listed = listed_threads(host, threads, owners)
-    if len(listed) < 2:
+    if len(listed) < 2 and not (listed and listed[0].thread_id == host.active):
         return []
     return [
         thread.row(thread.thread_id == host.active, thread.thread_id in finished)
@@ -829,10 +862,16 @@ def switch(
 
 
 def switch_confirmed(target: Thread, pane: Pane | None, threads: list[Thread]) -> bool:
-    """Whether Codex now shows `target`, from a title that names it and no other thread.
+    """Whether Codex now shows `target`, from a title that carries its ID, or else names it and no
+    other thread.
 
-    A thread without a name, or one sharing its name, cannot be confirmed by the title."""
-    if pane is None or not target.name:
+    Without the ID, a thread without a name, or one sharing its name, cannot be confirmed."""
+    if pane is None:
+        return False
+    prefixes = title_thread_ids(pane.title)
+    if prefixes:
+        return id_shown_thread(prefixes, threads) == target.thread_id
+    if not target.name:
         return False
     names = set(title_names(pane.title))
     if target.name not in names:

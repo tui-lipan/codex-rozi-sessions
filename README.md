@@ -36,7 +36,10 @@ rozi run-action reload-extensions
 
 Later releases can be applied with `rozi extensions update codex-rozi-sessions`.
 
-Start `codex` in a rozi pane. Rows appear once more than one thread is listed for it.
+Start `codex` in a rozi pane. Then, once, add the thread ID to Codex's terminal title: run
+`/title`, type `thread-id`, press Space to select it, and Enter to save. That tells the extension
+exactly which thread each client shows, even when two threads share a name. Without it, the
+extension goes by the thread name in the title; see [Limits](#limits).
 
 ## What is listed
 
@@ -44,11 +47,12 @@ The supervised `codex-rozi-sessions.watch` service asks Codex's background serve
 it has loaded, every two seconds, and reads rozi's pane list. A pane is a Codex client when rozi
 detects Codex in it and can read its foreground process.
 
-The thread a client shows is the one Codex names in the pane's title (`<thread name> | <project>`
-by default), when exactly one listed thread has that name. Failing that, it is the thread rozi's
-Codex plugin last reported for the pane, which also covers a new thread before Codex has named it,
-and then the thread this extension last switched the client to. When several threads share the
-name in the title, only one of them is taken. That thread is the active row. Rows
+The thread a client shows is the one whose ID the pane's title carries, once `thread-id` is in
+Codex's `/title`. Otherwise it is the one Codex names in the title (`<thread name> | <project>` by
+default), when exactly one listed thread has that name. Failing that, it is the thread rozi's
+Codex plugin last reported for the pane, and then the thread this extension last switched the
+client to. When several threads share the name in the title, only one of them is taken. That
+thread is the active row. Rows
 are ordered by when each thread was created, whichever one is on screen, so switching never moves a
 row. Each shows the directory its thread works in, so rozi groups it by that directory's project
 and branch.
@@ -67,7 +71,8 @@ a second, since the extension watches the pane's title between polls.
 
 Sub-agents are left out; they belong to their parent's turn. So are side conversations and the
 blank thread a client opens before your first prompt. A client with only one thread listed in its
-pane publishes no rows, and is left to rozi's ordinary agent detection.
+pane publishes that row only while the thread is on screen; until then it is left to rozi's
+ordinary agent detection. The row is what lets rozi resume the thread when it restores the session.
 
 | Codex reports | Row status |
 | --- | --- |
@@ -87,9 +92,10 @@ have moved on to another thread. Other idle threads leave the list once Codex un
 
 ### With rozi's Codex plugin
 
-rozi's Codex hook plugin reports the state of the thread the client shows. Each row carries its
-thread ID as `native_session`, and rozi lets the hook report drive the row with the same ID, so
-that row shows the hooks' live state while every other row stays listed.
+Codex runs the hooks of a background-server thread inside that server, outside any pane, so rozi's
+Codex hook plugin does not report for the threads listed here; their state comes from the server
+as described above. A hook report that does reach the pane drives the row with the same
+`native_session`.
 
 ## Switch threads
 
@@ -105,8 +111,9 @@ The extension does not switch, and says why in a rozi notification, when:
 - The selected thread is no longer listed.
 
 If the command does not read back exactly, for example because someone typed at the same moment,
-it is left in the prompt unsent. A switch counts once the pane's title names the selected thread
-and no other listed thread has that name. If Codex refuses, the notification quotes Codex's answer.
+it is left in the prompt unsent. A switch counts once the pane's title carries the selected thread's
+ID, or, without `thread-id` in the title, names the thread and no other listed thread has that
+name. If Codex refuses, the notification quotes Codex's answer.
 If there is no confirmation within ten seconds, a notification says so, and the active row keeps
 following what Codex itself shows.
 
@@ -135,11 +142,11 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
 - **Remote panes.** rozi omits the foreground process for a remote attachment, whose client talks
   to another machine's background server, so those panes are left alone.
 - **Clients run with `--no-daemon`** keep their threads to themselves; their panes list nothing.
-- **The active row** comes from the thread name in the pane's title. A thread without a name yet,
-  two threads with the same name, which Codex gives to threads started with similar prompts, or a
-  `/title` setup that hides the thread name makes it ambiguous. Install rozi's Codex hook plugin to
-  resolve those cases; without it only the last switch made here can, and when nothing does, no
-  row is active and `rozi agents prompt` and `read` refuse to target any of the pane's threads.
+- **The active row**, without `thread-id` in Codex's `/title`, comes from the thread name in the
+  pane's title. A thread without a name yet, two threads with the same name, which Codex gives to
+  threads started with similar prompts, or a `/title` setup that hides the thread name makes it
+  ambiguous; the last switch made here is used instead. When nothing decides, no row is active,
+  and `rozi agents prompt` and `read` refuse to target any of the pane's threads.
 - The extension reads the background server through Codex's app-server protocol, which Codex
   marks experimental. A Codex release that changes it shows up as no rows, not as wrong ones.
 - Switching reads Codex's screen. A future Codex release that redraws its prompt differently makes
