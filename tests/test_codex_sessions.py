@@ -265,6 +265,25 @@ class HostTests(unittest.TestCase):
         self.assertEqual(cs.Pane.from_wire(value).session, "t-1")
         self.assertIsNone(cs.Pane.from_wire({"id": 4}).session)
 
+    def test_a_client_on_its_start_screen_shows_it_as_the_active_row(self):
+        threads = [thread("a", name="a", created=1), thread("b", name="b", created=2),
+                   thread("blank", name=None, preview="", created=3)]
+        host = cs.Host(pane(3), "blank")
+        rows = rows_by_pane([host], threads)[3]
+        self.assertEqual([(row["id"], row["title"], row["active"]) for row in rows],
+                         [("a", "a", False), ("b", "b", False), ("blank", "New thread", True)])
+        self.assertEqual(rows[-1]["native_session"], "blank")
+        # Alone, it is left to rozi's own detection of the client.
+        self.assertEqual(rows_by_pane([host], threads[2:]), {3: []})
+        # Only the one on screen: another client's start screen is not listed here.
+        self.assertEqual(published_ids(rows_by_pane([cs.Host(pane(3), "a")], threads)),
+                         {3: ["a", "b"]})
+
+    def test_a_hook_report_names_the_start_screen(self):
+        threads = [thread("a", name="a"), thread("blank", name=None, preview="")]
+        hooked = replace(pane(4, title="rozi"), session="blank")
+        self.assertEqual(cs.classify([hooked], threads, {})[0].active, "blank")
+
     def test_a_lone_thread_is_published_only_while_it_is_on_screen(self):
         threads = [thread("a"), thread("blank", name=None, preview="")]
         rows = rows_by_pane([cs.Host(pane(), "a")], threads)[3]
@@ -426,21 +445,18 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(memory.last_target, "b")
         self.assertEqual(cli.notes, [])
 
-    def test_switch_while_current_thread_is_working(self):
-        command = cs.resume_command("b")
+    def test_a_running_turn_is_explained_not_typed_into(self):
+        """Codex refuses `/resume` until the turn ends, and nothing else switches its thread."""
         for working_footer, daemon_active in [(True, False), (False, True), (True, True)]:
             with self.subTest(working_footer=working_footer, daemon_active=daemon_active):
                 threads = [thread("a", name="work", status="active" if daemon_active else "idle"),
                            THREADS[1]]
-                cli = FakeCli(threads, [composer_frame(working=working_footer),
-                                       composer_frame(command, working=working_footer)],
-                              ["other | rozi"])
+                cli = FakeCli(threads, [composer_frame(working=working_footer)], ["other | rozi"])
                 switched, memory = self.switch(cli)
-                self.assertTrue(switched)
-                self.assertEqual(cli.typed, [(3, command)])
-                self.assertEqual(cli.pressed, [(3, "Enter")])
-                self.assertEqual(memory.last_target, "b")
-                self.assertEqual(cli.notes, [])
+                self.assertFalse(switched)
+                self.assertEqual((cli.typed, cli.pressed), ([], []))
+                self.assertIsNone(memory.last_target)
+                self.assertEqual(cli.notes, [(cs.BUSY, True)])
 
     def test_selecting_the_shown_thread_does_nothing(self):
         cli = FakeCli(THREADS, [composer_frame()])
@@ -473,12 +489,20 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(cli.pressed, [])
         self.assertIn("not sent", cli.notes[0][0])
 
-    def test_a_turn_starting_before_enter_allows_the_switch(self):
+    def test_a_turn_starting_before_enter_leaves_the_command_unsent(self):
         command = cs.resume_command("b")
         cli = FakeCli(THREADS, [composer_frame(), composer_frame(command, working=True)],
                       ["other | rozi"])
-        self.assertTrue(self.switch(cli)[0])
-        self.assertEqual(cli.pressed, [(3, "Enter")])
+        self.assertFalse(self.switch(cli)[0])
+        self.assertEqual(cli.pressed, [])
+        self.assertIn("left unsent", cli.notes[0][0])
+
+    def test_codexs_own_refusal_mid_turn_is_quoted(self):
+        command = cs.resume_command("b")
+        cli = FakeCli(THREADS, [composer_frame(), composer_frame(command)], ["work | rozi"])
+        cli.texts = [f"› {command}\n■ '/resume' is disabled while a task is in progress."]
+        self.assertFalse(self.switch(cli)[0])
+        self.assertIn("disabled while a task is in progress", cli.notes[0][0])
 
     def test_codex_refusal_is_quoted(self):
         command = cs.resume_command("b")

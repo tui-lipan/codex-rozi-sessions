@@ -73,10 +73,15 @@ only:
 Rows follow a switch made in Codex itself, with `/resume` or its thread picker, within about half
 a second, since the extension watches the pane's title between polls.
 
-Sub-agents are left out; they belong to their parent's turn. So are side conversations and the
-blank thread a client opens before your first prompt. A client with only one thread listed in its
-pane publishes that row only while the thread is on screen; until then it is left to rozi's
-ordinary agent detection. The row is what lets rozi resume the thread when it restores the session.
+Sub-agents are left out; they belong to their parent's turn. So are side conversations. A client
+with only one thread listed in its pane publishes that row only while the thread is on screen; until
+then it is left to rozi's ordinary agent detection. The row is what lets rozi resume the thread when
+it restores the session.
+
+A client on Codex's start screen, before your first prompt, shows a blank thread. When the pane
+lists other threads, that blank thread is the active row, titled "New thread", and after your first
+prompt the same row becomes the thread's own. This needs the thread's ID in the title or rozi's
+Codex plugin, since a blank thread has no name to find it by.
 
 | Codex reports | Row status |
 | --- | --- |
@@ -106,10 +111,12 @@ as described above. A hook report that does reach the pane drives the row with t
 Selecting a row focuses the pane, and then this extension switches the client to that thread. It
 types `/resume <thread-id>` into Codex's prompt, reads it back from the screen, and only then
 presses Enter. The thread you leave stays listed while Codex keeps it loaded. A thread Codex has
-already unloaded is loaded again. You can switch while the current thread is working.
+already unloaded is loaded again.
 
 The extension does not switch, and says why in a rozi notification, when:
 
+- Codex is working on a turn. Codex refuses `/resume` until the turn ends, so select the row again
+  then.
 - Codex's prompt holds unsent text. Codex's dim placeholder does not count.
 - Codex is showing an approval, a question, a list, or any screen without its prompt.
 - The selected thread is no longer listed.

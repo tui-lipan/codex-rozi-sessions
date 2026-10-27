@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
@@ -57,6 +57,10 @@ TITLE_SEPARATOR = " | "
 # a project or thread name that happens to be hex is not taken for one.
 THREAD_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}[0-9a-f-]*")
 ELLIPSIS = ("...", "…")
+# What a row says for the blank thread a client opens before its first prompt.
+NEW_THREAD = "New thread"
+# Codex refuses `/resume` while a turn runs, and offers no other way to switch until it ends.
+BUSY = "Codex can't switch threads mid-turn. Select the row again once it finishes."
 # Codex's answers to a `/resume` it did not carry out.
 SWITCH_FAILURES = (
     "No saved chat found",
@@ -64,6 +68,7 @@ SWITCH_FAILURES = (
     "Failed to attach",
     "Failed to view thread",
     "is ambiguous",
+    "is disabled while a task is in progress",
 )
 
 
@@ -144,6 +149,10 @@ class Thread:
         first prompt."""
         return not self.subagent and not self.ephemeral and bool(self.name or self.preview)
 
+    def is_blank(self) -> bool:
+        """The thread a client opens before its first prompt: Codex's start screen."""
+        return not self.subagent and not self.ephemeral and not (self.name or self.preview)
+
     def is_working(self) -> bool:
         return self.status == "active"
 
@@ -168,7 +177,7 @@ class Thread:
         status, reason = self.row_state(finished)
         row: dict[str, object] = {
             "id": self.thread_id,
-            "title": self.name or first_line(self.preview) or "",
+            "title": self.name or first_line(self.preview) or NEW_THREAD,
             "status": status,
             "active": active,
             # Ties the row to the thread Codex's own hooks report on, if they run.
@@ -348,7 +357,7 @@ def classify(
     switch from before a `/resume` to another of them is not taken for it."""
     hosts = []
     listable = [thread for thread in threads if thread.is_listable()]
-    loaded = {thread.thread_id for thread in listable}
+    loaded = {thread.thread_id for thread in threads if thread.is_listable() or thread.is_blank()}
     for pane in panes:
         if not pane.runs_codex():
             continue
@@ -432,6 +441,14 @@ def host_rows(
     listed = listed_threads(host, threads, owners)
     if len(listed) < 2 and not (listed and listed[0].thread_id == host.active):
         return []
+    # A client on its start screen still shows something: the blank thread is its active row
+    # beside the threads it owns, and becomes that thread's own row after the first prompt.
+    blank = next(
+        (thread for thread in threads if thread.thread_id == host.active and thread.is_blank()),
+        None,
+    )
+    if blank is not None:
+        listed = sorted(listed + [blank], key=lambda thread: (thread.created_at, thread.thread_id))
     return [
         thread.row(thread.thread_id == host.active, thread.thread_id in finished)
         for thread in listed
@@ -809,15 +826,20 @@ def switch(
     """Put the Codex pane's client on `target`, or say why not. `/resume` also opens a thread
     Codex has unloaded since it was listed.
 
-    Never types into a prompt that holds unsent text or shows a dialog. Reads the typed command
-    back right before Enter, and reports success only once Codex names the target. Returns whether
-    it did."""
+    Never types into a prompt that holds unsent text or shows a dialog, or while a turn runs,
+    which Codex refuses `/resume` during. Reads the typed command back right before Enter, and
+    reports success only once Codex names the target. Returns whether it did."""
     pane_id = host.pane.pane_id
     if target.thread_id == host.active:
         return True
     threads = {thread.thread_id: thread for thread in cli.threads()}
     threads.setdefault(target.thread_id, target)
-    refusal = switch_refusal(cli.screen(pane_id))
+    screen = cli.screen(pane_id)
+    shown = threads.get(host.active) if host.active else None
+    if screen.working or (shown is not None and shown.is_working()):
+        cli.notify(BUSY, error=True)
+        return False
+    refusal = switch_refusal(screen)
     if refusal is not None:
         cli.notify(refusal.message, error=True)
         return False
@@ -831,6 +853,9 @@ def switch(
             break
         if attempt + 1 < VERIFY_ATTEMPTS:
             sleep(VERIFY_INTERVAL)
+    if prompt_holds(typed, command) and typed.working:
+        cli.notify(f"{BUSY} The command is left unsent in its prompt.", error=True)
+        return False
     if not prompt_holds(typed, command):
         cli.notify(
             "Could not confirm the switch command in Codex's prompt, so it was not sent. "
