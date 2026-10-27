@@ -18,11 +18,15 @@ Activity
 
 ## Requirements
 
-- rozi 0.0.30 or newer, for the `agent` kind of published rows
+- rozi 0.0.33 or newer, on the client and on every host you attach sessions on
 - Codex 0.160 or newer, with its background server (`codex app-server daemon`), which Codex starts
   on its own unless you run it with `--no-daemon`
-- Python 3 available as `python3`
+- Python 3 available as `python3`, and `codex`, on each host that runs Codex
 - Linux or macOS. See [Limits](#limits).
+
+The extension runs on the machine of each attached session, including a remote one attached with
+`rozi --remote`, beside that machine's Codex background server. Install it once, on the client;
+rozi copies it to the host.
 
 ## Install
 
@@ -137,10 +141,8 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
 
 ## Limits
 
-- **Windows.** rozi reports no foreground process there, so no pane is recognised as a Codex
-  client.
-- **Remote panes.** rozi omits the foreground process for a remote attachment, whose client talks
-  to another machine's background server, so those panes are left alone.
+- **Windows.** rozi cannot tell which program a pane runs there, so no pane is recognised as a
+  Codex client.
 - **Clients run with `--no-daemon`** keep their threads to themselves; their panes list nothing.
 - **The active row**, without `thread-id` in Codex's `/title`, comes from the thread name in the
   pane's title. A thread without a name yet, two threads with the same name, which Codex gives to
@@ -151,9 +153,10 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
   marks experimental. A Codex release that changes it shows up as no rows, not as wrong ones.
 - Switching reads Codex's screen. A future Codex release that redraws its prompt differently makes
   the extension refuse to switch rather than guess.
-- The service runs only while a rozi client with the extension is attached. With a rozi newer
-  than 0.0.29, it also exits on its own when that client is killed. Its errors go to a stream rozi
-  discards, so a missing `codex` shows up as no rows rather than as a message.
+- The service runs on a host only while a rozi client with the extension has a session attached
+  there, and lists the panes of that host's sessions only while one of them is on screen. It exits
+  on its own when that client is gone. A missing `codex` shows up as no rows; run
+  `rozi extensions logs codex-rozi-sessions` on that host to see why.
 
 ## Development
 

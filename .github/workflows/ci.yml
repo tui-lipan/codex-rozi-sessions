@@ -24,14 +24,18 @@ jobs:
     name: Rozi extension
     runs-on: ubuntu-latest
     steps:
+      # Side by side: `extensions check` snapshots the whole extension directory, which must not
+      # contain the rozi checkout.
       - uses: actions/checkout@v4
+        with:
+          path: extension
       - uses: actions/checkout@v4
         with:
           repository: tui-lipan/rozi
-          path: .ci/rozi
+          path: rozi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: .ci/rozi
+          workspaces: rozi
       - name: Validate extension manifest
-        run: cargo run --manifest-path .ci/rozi/Cargo.toml --bin rozi -- extensions check "$GITHUB_WORKSPACE"
+        run: cargo run --manifest-path rozi/Cargo.toml --bin rozi -- extensions check "$GITHUB_WORKSPACE/extension"

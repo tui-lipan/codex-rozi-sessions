@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 COMMAND_TIMEOUT = 5.0
@@ -187,7 +187,6 @@ class Pane:
     cwd: str | None
     program: str | None
     agent: str | None
-    foreground_pid: int | None
     title: str | None
     # The thread the pane's Codex hooks last reported, from rozi releases that say.
     session: str | None = None
@@ -204,16 +203,14 @@ class Pane:
             cwd=text(value.get("cwd")),
             program=text(value.get("foreground_program")),
             agent=text(value.get("agent")),
-            foreground_pid=integer(value.get("foreground_pid")),
             title=text(value.get("title")),
             session=text(value.get("agent_session")),
         )
 
     def runs_codex(self) -> bool:
-        """A local pane running a Codex client. rozi reports no foreground process for a remote
-        pane, whose client talks to another machine's daemon."""
-        if self.foreground_pid is None:
-            return False
+        """A pane running a Codex client. The service runs on each session's host and rozi lists
+        it only the panes of that host's sessions, so every client it sees talks to the same
+        background server it reads."""
         return self.agent == "codex" or (self.program or "").casefold() in {"codex", "codex-cli"}
 
 
