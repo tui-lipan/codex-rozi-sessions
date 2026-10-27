@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import socket
+import stat
 import struct
 import sys
 import tempfile
@@ -816,6 +817,52 @@ class AppServerTests(unittest.TestCase):
             with self.assertRaises(cs.SessionsError):
                 server.loaded_threads()
         self.assertIsNone(server.sock)
+
+
+class ClientWatchTests(unittest.TestCase):
+    """Polling again as soon as a Codex client starts or exits, from rozi's events."""
+
+    @staticmethod
+    def program(program: str, previous: str = "") -> str:
+        data = {"pane": "3", "program": program, "previous_program": previous, "pid": ""}
+        return json.dumps({"event": "foreground-changed", "data": data})
+
+    @staticmethod
+    def agent(agent: str, state: str, previous: str) -> str:
+        data = {"pane": "3", "agent": agent, "state": state, "previous_state": previous}
+        return json.dumps({"event": "agent-state-changed", "data": data})
+
+    def test_only_a_codex_client_starting_or_exiting_counts(self) -> None:
+        self.assertTrue(cs.client_changed(self.program("codex")))
+        self.assertTrue(cs.client_changed(self.program("", previous="Codex-CLI")))
+        self.assertFalse(cs.client_changed(self.program("cargo", previous="ls")))
+        self.assertTrue(cs.client_changed(self.agent("codex", "idle", "")))
+        self.assertTrue(cs.client_changed(self.agent("codex", "", "working")))
+        self.assertFalse(cs.client_changed(self.agent("codex", "idle", "working")))
+        self.assertFalse(cs.client_changed(self.agent("claude", "idle", "")))
+        self.assertFalse(cs.client_changed("not json"))
+
+    @unittest.skipIf(os.name == "nt", "the stand-in rozi is a POSIX shell script")
+    def test_the_stream_queues_a_poll_and_a_refusal_leaves_the_poll_alone(self) -> None:
+        def watch(script: str) -> tuple[list[tuple[object, ...]], str]:
+            with tempfile.TemporaryDirectory() as directory:
+                args = Path(directory) / "args"
+                rozi = Path(directory) / "rozi"
+                rozi.write_text(f'#!/bin/sh\necho "$@" > "{args}"\n{script}\n', encoding="utf-8")
+                rozi.chmod(rozi.stat().st_mode | stat.S_IXUSR)
+                messages: queue.Queue[tuple[object, ...]] = queue.Queue()
+                with mock.patch.object(cs, "ROZI", str(rozi)):
+                    cs.watch_clients(messages).join(timeout=5)
+                return list(messages.queue), args.read_text().strip()
+
+        streamed = "\n".join(
+            f"echo '{line}'" for line in (self.program("cargo"), self.agent("codex", "idle", ""))
+        )
+        queued, args = watch(streamed)
+        self.assertEqual(args, "subscribe foreground-changed agent-state-changed")
+        self.assertEqual(queued, [("poll",)])
+        refused, _ = watch("echo 'unknown event' >&2; exit 1")
+        self.assertEqual(refused, [])
 
 
 class WatchHostTest(unittest.TestCase):

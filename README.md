@@ -48,8 +48,10 @@ extension goes by the thread name in the title; see [Limits](#limits).
 ## What is listed
 
 The supervised `codex-rozi-sessions.watch` service asks Codex's background server which threads
-it has loaded, every two seconds, and reads rozi's pane list. A pane is a Codex client when rozi
-detects Codex in it and can read its foreground process.
+it has loaded, every two seconds, and reads rozi's pane list. It looks again at once when a Codex
+client starts or exits in a pane, on a rozi that reports `foreground-changed` and
+`agent-state-changed`. A pane is a Codex client when rozi detects Codex in it and can read its
+foreground process.
 
 The thread a client shows is the one whose ID the pane's title carries, once `thread-id` is in
 Codex's `/title`. Otherwise it is the one Codex names in the title (`<thread name> | <project>` by

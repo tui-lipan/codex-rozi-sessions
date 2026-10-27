@@ -37,6 +37,8 @@ EXTENSION_ID = "codex-rozi-sessions"
 VERSION = "0.3.1"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
+# Foreground programs that are a Codex client.
+CLIENT_PROGRAMS = {"codex", "codex-cli"}
 COMMAND_TIMEOUT = 5.0
 SOCKET_TIMEOUT = 5.0
 # How long to wait for Codex to show the selected thread after `/resume`.
@@ -220,7 +222,7 @@ class Pane:
         """A pane running a Codex client. The service runs on each session's host and rozi lists
         it only the panes of that host's sessions, so every client it sees talks to the same
         background server it reads."""
-        return self.agent == "codex" or (self.program or "").casefold() in {"codex", "codex-cli"}
+        return self.agent == "codex" or (self.program or "").casefold() in CLIENT_PROGRAMS
 
 
 @dataclass
@@ -1159,6 +1161,58 @@ def activation(line: str) -> str | None:
     return text(value.get("activate"))
 
 
+def client_changed(line: str) -> bool:
+    """Whether one rozi event is a Codex client starting or exiting in a pane.
+
+    A pane is a client by its program or by rozi detecting Codex in it (see `Pane.runs_codex`), so
+    both count: the program starting or exiting, and a Codex agent appearing or going. A Codex
+    agent changing state does not change which panes are clients.
+    """
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(event, dict) or not isinstance(data := event.get("data"), dict):
+        return False
+    if event.get("event") == "agent-state-changed":
+        return text(data.get("agent")) == "codex" and not (
+            text(data.get("state")) and text(data.get("previous_state"))
+        )
+    return any(
+        (text(data.get(field)) or "").casefold() in CLIENT_PROGRAMS
+        for field in ("program", "previous_program")
+    )
+
+
+def watch_clients(messages: "queue.Queue[tuple[object, ...]]") -> threading.Thread:
+    """Queue a poll as soon as a Codex client starts or exits in a pane, so its rows come and go
+    at once instead of at the next poll.
+
+    A rozi without these events refuses the stream, and the poll alone remains. Codex's own thread
+    list changes without any rozi event, so the poll stays either way.
+    """
+
+    def read() -> None:
+        try:
+            with subprocess.Popen(
+                [ROZI, "subscribe", "foreground-changed", "agent-state-changed"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ) as stream:
+                assert stream.stdout is not None
+                for line in stream.stdout:
+                    if client_changed(line):
+                        messages.put(("poll",))
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=read, name="clients", daemon=True)
+    thread.start()
+    return thread
+
+
 def watch_host(messages: "queue.Queue[tuple[object, ...]]", fd: int = 0) -> bool:
     """Queue a stop once rozi is gone; False when this rozi gives no way to tell.
 
@@ -1197,6 +1251,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     watch_host(service.messages)
+    watch_clients(service.messages)
     try:
         return service.run()
     finally:
