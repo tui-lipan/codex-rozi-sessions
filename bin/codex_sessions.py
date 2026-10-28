@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.3.1"
+VERSION = "0.4.1"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
