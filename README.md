@@ -6,19 +6,11 @@ single pane. This extension lists every loaded thread as its own row in that pan
 Activity sidebar and Agents view show each one's state under the repository and branch it works
 in. Selecting a row switches the client to that thread.
 
-```text
-Activity
- rozi                                  master
- ⠋  Codex #1   Investigate pane close animation
- rozi                    codex/fix-login
- !  Codex #2   Fix login redirect
- tui-lipan                             main
- ✓  Codex #3   Document focused_node_id
-```
+![rozi's Activity sidebar listing Codex threads by repository and branch](docs/screenshot.webp)
 
 ## Requirements
 
-- rozi 0.0.33 or newer, on the client and on every host you attach sessions on
+- rozi 0.0.36 or newer, on the client and on every host you attach sessions on
 - Codex 0.160 or newer, with its background server (`codex app-server daemon`), which Codex starts
   on its own unless you run it with `--no-daemon`
 - Python 3 available as `python3`, and `codex`, on each host that runs Codex
