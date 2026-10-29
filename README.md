@@ -49,7 +49,9 @@ The thread a client shows is the one whose ID the pane's title carries, once `th
 Codex's `/title`. Otherwise it is the one Codex names in the title (`<thread name> | <project>` by
 default), when exactly one listed thread has that name. Failing that, it is the thread rozi's
 Codex plugin last reported for the pane, and then the thread this extension last switched the
-client to. When several threads share the name in the title, only one of them is taken. That
+client to. When several threads share the name in the title, only one of them is taken. If
+neither of those settles which, the one whose turn runs exactly while the title shows Codex's
+spinner is taken, and it stays taken after its turn ends until something else says otherwise. That
 thread is the active row. Rows
 are ordered by when each thread was created, whichever one is on screen, so switching never moves a
 row. Each shows the directory its thread works in, so rozi groups it by that directory's project
@@ -148,7 +150,8 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
 - **The active row**, without `thread-id` in Codex's `/title`, comes from the thread name in the
   pane's title. A thread without a name yet, two threads with the same name, which Codex gives to
   threads started with similar prompts, or a `/title` setup that hides the thread name makes it
-  ambiguous; the last switch made here is used instead. When nothing decides, no row is active,
+  ambiguous; the last switch made here is used instead, and then whichever of the threads sharing
+  the name runs a turn while the title's spinner shows. When nothing decides, no row is active,
   and `rozi agents prompt` and `read` refuse to target any of the pane's threads.
 - The extension reads the background server through Codex's app-server protocol, which Codex
   marks experimental. A Codex release that changes it shows up as no rows, not as wrong ones.

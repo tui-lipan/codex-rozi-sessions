@@ -235,6 +235,28 @@ class HostTests(unittest.TestCase):
         memory[4].last_target = "a"
         self.assertEqual(cs.classify([stale], threads, memory)[0].active, "a")
 
+    def test_the_spinner_tells_threads_sharing_the_titled_name_apart(self):
+        old, new = thread("old", name="twin"), thread("new", name="twin", status="active")
+        memory: dict[int, object] = {}
+        spinning = pane(4, title="⠏ twin | rozi")
+        self.assertEqual(cs.classify([spinning], [old, new], memory)[0].active, "new")
+        # The turn failed and the spinner stopped: neither twin runs, so the title cannot tell them
+        # apart, and the thread it last told apart stays on screen.
+        failed = replace(new, status="systemError")
+        stopped = replace(spinning, title="twin | rozi")
+        self.assertEqual(cs.classify([stopped], [old, failed], memory)[0].active, "new")
+        # A twin running in the background while the one on screen sits idle.
+        busy = replace(old, status="active")
+        self.assertEqual(cs.classify([stopped], [busy, failed], {})[0].active, "new")
+        # Both running, or neither, with nothing remembered, says nothing.
+        self.assertIsNone(cs.classify([spinning], [busy, new], {})[0].active)
+        self.assertIsNone(cs.classify([stopped], [old, failed], {})[0].active)
+        # A hook report outranks the spinner.
+        hooked = replace(spinning, session="old")
+        self.assertEqual(cs.classify([hooked], [old, new], {})[0].active, "old")
+        self.assertFalse(cs.title_spins("⠀twin | rozi"))
+        self.assertFalse(cs.title_spins(None))
+
     def test_a_title_carrying_the_thread_id_says_exactly_which_thread_is_shown(self):
         a = "01a16fd1-20cc-7dc1-90ce-8885b809b462"
         b = "01a16fd3-38f3-7e21-9acd-8f6e77b0ba46"

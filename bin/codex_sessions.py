@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
@@ -231,6 +231,9 @@ class HostMemory:
 
     # The thread this service last switched the client to, for when the title does not say.
     last_target: str | None = None
+    # The thread the title's spinner last told apart from others sharing its name, for when the
+    # spinner no longer does.
+    last_shown: str | None = None
     published: list[dict[str, object]] | None = None
 
 
@@ -317,6 +320,13 @@ def id_shown_thread(prefixes: list[str], threads: list[Thread]) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def title_spins(title: str | None) -> bool:
+    """Whether the title carries Codex's spinner, which it shows while the thread on screen runs a
+    turn."""
+    spinner = SPINNER.match(title or "")
+    return spinner is not None and any("⠁" <= char <= "⣿" for char in spinner.group())
+
+
 def titled_threads(title: str | None, threads: list[Thread]) -> list[str]:
     """The threads whose name the title carries."""
     names = set(title_names(title))
@@ -353,11 +363,14 @@ def classify(
     A title carrying the thread ID says so exactly, even for a thread too new to list, which leaves
     no row on screen. Without one: a title naming exactly one thread, which follows a switch at
     once; else the thread Codex's hooks last reported, which also names a new thread before Codex
-    has named it and tells threads sharing a name apart; else the last switch this service made.
+    has named it and tells threads sharing a name apart; else the last switch this service made;
+    else the one thread sharing the titled name that runs exactly when the title spins, and once
+    the spinner has told it apart, that thread for as long as no other signal says otherwise.
 
     When the title names several threads, only one of those can be on screen, so a hook report or
     switch from before a `/resume` to another of them is not taken for it."""
     hosts = []
+    by_id = {thread.thread_id: thread for thread in threads}
     listable = [thread for thread in threads if thread.is_listable()]
     loaded = {thread.thread_id for thread in threads if thread.is_listable() or thread.is_blank()}
     for pane in panes:
@@ -370,10 +383,17 @@ def classify(
         titled = titled_threads(pane.title, listable)
         active = titled[0] if len(titled) == 1 else None
         candidates = set(titled) or loaded
-        remembered = memory.get(pane.pane_id, HostMemory()).last_target
-        for fallback in (pane.session, remembered):
+        remembered = memory.setdefault(pane.pane_id, HostMemory())
+        for fallback in (pane.session, remembered.last_target):
             if active is None and fallback in candidates:
                 active = fallback
+        if active is None and len(titled) > 1:
+            spins = title_spins(pane.title)
+            running = [tid for tid in titled if by_id[tid].is_working() == spins]
+            if len(running) == 1:
+                remembered.last_shown = running[0]
+            if remembered.last_shown in candidates:
+                active = remembered.last_shown
         hosts.append(Host(pane=pane, active=active))
     return hosts
 
