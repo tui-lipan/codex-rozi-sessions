@@ -192,6 +192,10 @@ class Thread:
         return row
 
 
+# A pane's identity: its session instance and its id, which repeats across sessions.
+PaneKey = tuple[str, int]
+
+
 @dataclass(frozen=True)
 class Pane:
     pane_id: int
@@ -201,6 +205,10 @@ class Pane:
     title: str | None
     # The thread the pane's Codex hooks last reported, from rozi releases that say.
     session: str | None = None
+    # The session the pane belongs to, and whether it is the one on screen. Commands naming a pane
+    # reach the session on screen, so `capture-pane` and `send-text` are for those panes only.
+    instance: str | None = None
+    on_screen: bool = True
 
     @classmethod
     def from_wire(cls, value: object) -> Pane | None:
@@ -216,7 +224,13 @@ class Pane:
             agent=text(value.get("agent")),
             title=text(value.get("title")),
             session=text(value.get("agent_session")),
+            instance=session_instance(value),
+            on_screen=value.get("on_screen") is not False,
         )
+
+    @property
+    def key(self) -> PaneKey:
+        return self.instance or "", self.pane_id
 
     def runs_codex(self) -> bool:
         """A pane running a Codex client. The service runs on each session's host and rozi lists
@@ -347,6 +361,11 @@ def is_under(path: str | None, root: str | None) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
+def session_instance(pane: dict[str, Any]) -> str | None:
+    reference = pane.get("reference")
+    return text(reference.get("session_instance")) if isinstance(reference, dict) else None
+
+
 @dataclass(frozen=True)
 class Host:
     """A pane running a Codex client, and the thread it shows, when that can be told."""
@@ -383,7 +402,7 @@ def classify(
         titled = titled_threads(pane.title, listable)
         active = titled[0] if len(titled) == 1 else None
         candidates = set(titled) or loaded
-        remembered = memory.setdefault(pane.pane_id, HostMemory())
+        remembered = memory.setdefault(pane.key, HostMemory())
         for fallback in (pane.session, remembered.last_target):
             if active is None and fallback in candidates:
                 active = fallback
@@ -399,7 +418,7 @@ def classify(
 
 
 def assign_owners(
-    hosts: list[Host], threads: list[Thread], owners: dict[str, int], scope: str
+    hosts: list[Host], threads: list[Thread], owners: dict[str, PaneKey], scope: str
 ) -> dict[str, int]:
     """The one Codex pane each listable thread is published in.
 
@@ -409,11 +428,11 @@ def assign_owners(
     client moves on to another thread. A thread no pane has claimed yet goes to the pane working
     nearest above its directory, the lowest pane on a tie; with `scope = "all"`, to the lowest
     pane when none contains it."""
-    by_pane = {host.pane.pane_id: host for host in hosts}
+    by_pane = {host.pane.key: host for host in hosts}
     shown: dict[str, int] = {}
-    for host in sorted(hosts, key=lambda host: host.pane.pane_id):
+    for host in sorted(hosts, key=lambda host: host.pane.key):
         if host.active:
-            shown.setdefault(host.active, host.pane.pane_id)
+            shown.setdefault(host.active, host.pane.key)
     assigned = {}
     for thread in threads:
         if not thread.is_listable():
@@ -433,26 +452,26 @@ def nearest_pane(thread: Thread, hosts: list[Host], scope: str) -> int | None:
     if containing:
         nearest = min(
             containing,
-            key=lambda host: (-len(os.path.normpath(host.pane.cwd or "")), host.pane.pane_id),
+            key=lambda host: (-len(os.path.normpath(host.pane.cwd or "")), host.pane.key),
         )
-        return nearest.pane.pane_id
+        return nearest.pane.key
     if scope == "all" and hosts:
-        return min(host.pane.pane_id for host in hosts)
+        return min(host.pane.key for host in hosts)
     return None
 
 
-def listed_threads(host: Host, threads: list[Thread], owners: dict[str, int]) -> list[Thread]:
+def listed_threads(host: Host, threads: list[Thread], owners: dict[str, PaneKey]) -> list[Thread]:
     """The threads one Codex pane owns, oldest first.
 
     The order does not follow the thread on screen, so switching never moves a row: rozi names a
     pane's rows by position."""
-    listed = [thread for thread in threads if owners.get(thread.thread_id) == host.pane.pane_id]
+    listed = [thread for thread in threads if owners.get(thread.thread_id) == host.pane.key]
     listed.sort(key=lambda thread: (thread.created_at, thread.thread_id))
     return listed
 
 
 def host_rows(
-    host: Host, threads: list[Thread], owners: dict[str, int], finished: set[str]
+    host: Host, threads: list[Thread], owners: dict[str, PaneKey], finished: set[str]
 ) -> list[dict[str, object]]:
     """The rows a Codex pane publishes.
 
@@ -784,10 +803,14 @@ class Cli:
         return self.daemon.loaded_threads()
 
     def panes(self) -> list[Pane]:
-        return parse_panes(self.run([ROZI, "list-panes", "--format", "json"]))
+        return parse_panes(
+            self.run([ROZI, "list-panes", "--scope", "attached", "--format", "json"])
+        )
 
     def pane(self, pane_id: int) -> Pane | None:
-        return next((pane for pane in self.panes() if pane.pane_id == pane_id), None)
+        return next(
+            (pane for pane in self.panes() if pane.pane_id == pane_id and pane.on_screen), None
+        )
 
     def screen_text(self, pane_id: int) -> str:
         data = response_data(
@@ -991,21 +1014,27 @@ class SessionsService:
         self.memory: dict[int, HostMemory] = {}
         self.hosts: dict[int, Host] = {}
         # The pane each thread is published in, kept between polls; see `assign_owners`.
-        self.owners: dict[str, int] = {}
+        self.owners: dict[str, PaneKey] = {}
         # Every thread the last poll could list, by id, for resolving a row activation.
         self.known: dict[str, Thread] = {}
         # The thread names each Codex pane's title carried when last read, to notice a switch.
-        self.titles: dict[int, frozenset[str]] | None = None
+        self.titles: dict[PaneKey, frozenset[str]] | None = None
         self.observed = Observed()
         self.next_token = 1
         self.reported_error: str | None = None
 
-    def start_publisher(self, pane_id: int) -> Publisher:
+    def start_publisher(self, key: PaneKey) -> Publisher:
         token = self.next_token
         self.next_token += 1
         environment = os.environ.copy()
-        # `ROZI_PANE` names the pane a publish stream belongs to.
+        # These name the pane a publish stream belongs to, and it stays with that session's pane
+        # whichever session is on screen.
+        instance, pane_id = key
         environment["ROZI_PANE"] = str(pane_id)
+        if instance:
+            environment["ROZI_SESSION_INSTANCE"] = instance
+        else:
+            environment.pop("ROZI_SESSION_INSTANCE", None)
         # `--kind agent`: each row is a Codex thread, so rozi's Agents tab and picker list it with the
         # other agents, not only among the Activity rows.
         process = subprocess.Popen(
@@ -1018,22 +1047,22 @@ class SessionsService:
             env=environment,
         )
         publisher = Publisher(token=token, process=process)
-        self.publishers[pane_id] = publisher
+        self.publishers[key] = publisher
 
         def read() -> None:
             assert process.stdout is not None
             for line in process.stdout:
                 row_id = activation(line)
                 if row_id is not None:
-                    self.messages.put(("activate", pane_id, token, row_id))
+                    self.messages.put(("activate", key, token, row_id))
             process.wait()
-            self.messages.put(("closed", pane_id, token))
+            self.messages.put(("closed", key, token))
 
         threading.Thread(target=read, name=f"publish-{pane_id}", daemon=True).start()
         return publisher
 
-    def stop_publisher(self, pane_id: int) -> None:
-        publisher = self.publishers.pop(pane_id, None)
+    def stop_publisher(self, key: PaneKey) -> None:
+        publisher = self.publishers.pop(key, None)
         if publisher is None:
             return
         try:
@@ -1046,13 +1075,13 @@ class SessionsService:
         except subprocess.TimeoutExpired:
             publisher.process.kill()
 
-    def publish(self, pane_id: int, rows: list[dict[str, object]]) -> None:
-        memory = self.memory.setdefault(pane_id, HostMemory())
-        publisher = self.publishers.get(pane_id)
+    def publish(self, key: PaneKey, rows: list[dict[str, object]]) -> None:
+        memory = self.memory.setdefault(key, HostMemory())
+        publisher = self.publishers.get(key)
         if publisher is None:
             if not rows:
                 return
-            publisher = self.start_publisher(pane_id)
+            publisher = self.start_publisher(key)
             memory.published = None
         if memory.published == rows:
             return
@@ -1062,7 +1091,7 @@ class SessionsService:
             memory.published = rows
         except (BrokenPipeError, OSError):
             # The pane went away or the UI moved to another session. Try again next poll.
-            self.stop_publisher(pane_id)
+            self.stop_publisher(key)
 
     def poll(self) -> None:
         loaded = self.cli.threads()
@@ -1071,25 +1100,27 @@ class SessionsService:
         self.observed.mark_viewed({host.active for host in hosts if host.active})
         threads = self.observed.listed(loaded)
         self.known = {thread.thread_id: thread for thread in threads}
-        self.hosts = {host.pane.pane_id: host for host in hosts}
-        for pane_id in set(self.publishers) - set(self.hosts):
-            self.stop_publisher(pane_id)
-        for pane_id in set(self.memory) - set(self.hosts):
-            del self.memory[pane_id]
+        self.hosts = {host.pane.key: host for host in hosts}
+        # A pane is gone when no attached session lists it. A session off screen is still listed.
+        for key in set(self.publishers) - set(self.hosts):
+            self.stop_publisher(key)
+        for key in set(self.memory) - set(self.hosts):
+            del self.memory[key]
         finished = set(self.observed.finished)
         self.owners = assign_owners(hosts, threads, self.owners, self.settings.scope)
         for host in hosts:
             rows = host_rows(host, threads, self.owners, finished)
-            self.publish(host.pane.pane_id, rows)
+            self.publish(host.pane.key, rows)
 
-    def activate(self, pane_id: int, row_id: str) -> None:
-        host = self.hosts.get(pane_id)
-        if host is None:
+    def activate(self, key: PaneKey, row_id: str) -> None:
+        host = self.hosts.get(key)
+        # Pane ids repeat across sessions, and switching types into the pane the id names now.
+        if host is None or not host.pane.on_screen:
             return
         if not self.settings.switching:
             self.cli.notify("Switch to this thread in Codex with /resume.")
             return
-        memory = self.memory.setdefault(pane_id, HostMemory())
+        memory = self.memory.setdefault(key, HostMemory())
         target = self.known.get(row_id)
         if target is None:
             self.cli.notify("That Codex thread is no longer listed. Open it with /resume.", error=True)
@@ -1114,15 +1145,15 @@ class SessionsService:
         if kind == "stop":
             return False
         if kind == "closed":
-            pane_id, token = message[1], message[2]
-            current = self.publishers.get(pane_id)  # type: ignore[arg-type]
+            key, token = message[1], message[2]
+            current = self.publishers.get(key)  # type: ignore[arg-type]
             if current is not None and current.token == token:
-                self.publishers.pop(pane_id)  # type: ignore[arg-type]
+                self.publishers.pop(key)  # type: ignore[arg-type]
         elif kind == "activate":
-            pane_id, token, row_id = message[1], message[2], message[3]
-            current = self.publishers.get(pane_id)  # type: ignore[arg-type]
+            key, token, row_id = message[1], message[2], message[3]
+            current = self.publishers.get(key)  # type: ignore[arg-type]
             if current is not None and current.token == token:
-                self.activate(pane_id, str(row_id))  # type: ignore[arg-type]
+                self.activate(key, str(row_id))  # type: ignore[arg-type]
         elif kind == "poll":
             self.poll_once()
         return True
@@ -1144,7 +1175,7 @@ class SessionsService:
         except SessionsError:
             return False
         titles = {
-            pane.pane_id: frozenset(title_names(pane.title)) for pane in panes if pane.runs_codex()
+            pane.key: frozenset(title_names(pane.title)) for pane in panes if pane.runs_codex()
         }
         changed = self.titles is not None and titles != self.titles
         self.titles = titles
@@ -1165,8 +1196,8 @@ class SessionsService:
                     return 0
 
     def close(self) -> None:
-        for pane_id in list(self.publishers):
-            self.stop_publisher(pane_id)
+        for key in list(self.publishers):
+            self.stop_publisher(key)
         self.cli.close()
 
 

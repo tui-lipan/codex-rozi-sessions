@@ -10,7 +10,7 @@ in. Selecting a row switches the client to that thread.
 
 ## Requirements
 
-- rozi 0.0.36 or newer, on the client and on every host you attach sessions on
+- rozi 0.0.40 or newer, on the client and on every host you attach sessions on
 - Codex 0.160 or newer, with its background server (`codex app-server daemon`), which Codex starts
   on its own unless you run it with `--no-daemon`
 - Python 3 available as `python3`, and `codex`, on each host that runs Codex
@@ -158,7 +158,8 @@ a thread no pane has shown is listed only in a pane whose directory contains it.
 - Switching reads Codex's screen. A future Codex release that redraws its prompt differently makes
   the extension refuse to switch rather than guess.
 - The service runs on a host only while a rozi client with the extension has a session attached
-  there, and lists the panes of that host's sessions only while one of them is on screen. It exits
+  there. It keeps the rows of every session attached on its host current, on screen or not, but types
+into and reads the screen of a Codex client only while its session is on screen. It exits
   on its own when that client is gone. A missing `codex` shows up as no rows; run
   `rozi extensions logs codex-rozi-sessions` on that host to see why.
 

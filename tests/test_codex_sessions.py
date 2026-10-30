@@ -20,6 +20,11 @@ from unittest.mock import patch
 SCRIPT = Path(__file__).parents[1] / "bin" / "codex_sessions.py"
 
 
+def k(pane_id):
+    """The key of a pane no session instance qualifies."""
+    return "", pane_id
+
+
 def load_script():
     spec = importlib.util.spec_from_file_location("codex_sessions_example", SCRIPT)
     if spec is None or spec.loader is None:
@@ -158,9 +163,9 @@ class HostTests(unittest.TestCase):
 
     def test_last_switch_stands_in_for_an_unreadable_title(self):
         threads = [thread("a", name="twin"), thread("b", name="twin")]
-        memory = {3: cs.HostMemory(last_target="b")}
+        memory = {k(3): cs.HostMemory(last_target="b")}
         self.assertEqual(cs.classify([pane(3, title="twin | rozi")], threads, memory)[0].active, "b")
-        memory[3].last_target = "gone"
+        memory[k(3)].last_target = "gone"
         self.assertIsNone(cs.classify([pane(3, title="rozi")], threads, memory)[0].active)
 
     def test_rows_are_oldest_first_whichever_thread_is_shown(self):
@@ -176,7 +181,7 @@ class HostTests(unittest.TestCase):
         threads = [thread("a", name="a"), thread("b", name="b"), thread("c", name="c"),
                    thread("d", name="d")]
         first, second = cs.Host(pane(1), "a"), cs.Host(pane(2), "b")
-        owners = {"d": 2}
+        owners = {"d": k(2)}
         self.assertEqual(published_ids(rows_by_pane([first, second], threads, owners=owners)),
                          {1: ["a", "c"], 2: ["b", "d"]})
 
@@ -194,27 +199,27 @@ class HostTests(unittest.TestCase):
         threads = [thread("a", name="a"), thread("b", name="b"),
                    thread("deep", name="deep", cwd="/home/x/rozi/tree")]
         hosts = [cs.Host(pane(1, cwd="/home/x"), "a"), cs.Host(pane(2, cwd="/home/x/rozi"), "b")]
-        self.assertEqual(cs.assign_owners(hosts, threads, {}, "all")["deep"], 2)
+        self.assertEqual(cs.assign_owners(hosts, threads, {}, "all")["deep"], k(2))
         far = thread("far", name="far", cwd="/srv")
-        self.assertEqual(cs.assign_owners(hosts, threads + [far], {}, "all")["far"], 1)
+        self.assertEqual(cs.assign_owners(hosts, threads + [far], {}, "all")["far"], k(1))
         self.assertNotIn("far", cs.assign_owners(hosts, threads + [far], {}, "cwd"))
 
     def test_a_pane_keeps_its_threads_while_its_title_cannot_be_read(self):
         threads = [thread("a", name="a", created=1), thread("a2", name="a2", created=2),
                    thread("b", name="b", created=3), thread("b2", name="b2", created=4)]
         owners = cs.assign_owners([cs.Host(pane(1), "a"), cs.Host(pane(2), "b")], threads,
-                                  {"a2": 1, "b2": 2}, "all")
+                                  {"a2": k(1), "b2": k(2)}, "all")
         # A prompt was just sent: pane 1's title names no thread for a poll.
         blind = [cs.Host(pane(1), None), cs.Host(pane(2), "b")]
         owners = cs.assign_owners(blind, threads, owners, "all")
-        self.assertEqual(owners, {"a": 1, "a2": 1, "b": 2, "b2": 2})
+        self.assertEqual(owners, {"a": k(1), "a2": k(1), "b": k(2), "b2": k(2)})
 
     def test_a_closed_pane_hands_its_threads_to_one_other(self):
         threads = [thread("a", name="a"), thread("a2", name="a2"), thread("b", name="b")]
-        owners = {"a": 1, "a2": 1, "b": 2}
+        owners = {"a": k(1), "a2": k(1), "b": k(2)}
         hosts = [cs.Host(pane(2), "b"), cs.Host(pane(3), None)]
         self.assertEqual(cs.assign_owners(hosts, threads, owners, "all"),
-                         {"a": 2, "a2": 2, "b": 2})
+                         {"a": k(2), "a2": k(2), "b": k(2)})
 
     def test_hooks_name_a_thread_codex_has_not_named_yet(self):
         threads = [thread("a", name="a"), thread("fresh", name=None, preview="fix the bug")]
@@ -230,9 +235,9 @@ class HostTests(unittest.TestCase):
         self.assertEqual(cs.classify([hooked], threads, {})[0].active, "b")
         # A report or switch naming a thread the title rules out is from before a `/resume`.
         stale = replace(hooked, session="c")
-        memory = {4: cs.HostMemory(last_target="c")}
+        memory = {k(4): cs.HostMemory(last_target="c")}
         self.assertIsNone(cs.classify([stale], threads, memory)[0].active)
-        memory[4].last_target = "a"
+        memory[k(4)].last_target = "a"
         self.assertEqual(cs.classify([stale], threads, memory)[0].active, "a")
 
     def test_the_spinner_tells_threads_sharing_the_titled_name_apart(self):
@@ -265,7 +270,7 @@ class HostTests(unittest.TestCase):
         titled = pane(4, title="⠋ twin | rozi | 01a16fd3-38f3-7e21-9acd-8f6e7...")
         # Outranks a stale hook report and the last switch.
         stale = replace(titled, session=a)
-        self.assertEqual(cs.classify([stale], threads, {4: cs.HostMemory(last_target=a)})[0].active, b)
+        self.assertEqual(cs.classify([stale], threads, {k(4): cs.HostMemory(last_target=a)})[0].active, b)
         self.assertTrue(cs.switch_confirmed(threads[1], titled, threads))
         self.assertFalse(cs.switch_confirmed(threads[0], titled, threads))
         # A blank thread too new to list is still the one on screen, so no row is.
@@ -550,6 +555,93 @@ class SwitchTests(unittest.TestCase):
         self.assertFalse(cs.switch_confirmed(THREADS[1], None, THREADS))
 
 
+class AttachedSessionsTests(unittest.TestCase):
+    """A session off screen stays listed by rozi, under the same pane ids as the one on screen."""
+
+    def client(self, instance, on_screen, title="a | rozi"):
+        return replace(pane(1, title=title), instance=instance, on_screen=on_screen)
+
+    def make(self, threads, panes):
+        class AttachedCli(FakeCli):
+            def threads(self):
+                return list(self.thread_list)
+
+            def panes(self):
+                return list(self.current)
+
+        cli = AttachedCli(threads, [composer_frame()])
+        cli.thread_list, cli.current = threads, panes
+        service = cs.SessionsService(cs.Settings(), cli)
+        self.published = {}
+        service.publish = lambda key, rows: self.published.__setitem__(key, rows)
+        self.stopped = []
+        service.stop_publisher = self.stopped.append
+        return service, cli
+
+    def test_the_wire_says_which_session_a_pane_belongs_to(self):
+        value = {"id": 1, "reference": {"session_instance": "x"}, "on_screen": False}
+        self.assertEqual(cs.Pane.from_wire(value).key, ("x", 1))
+        self.assertFalse(cs.Pane.from_wire(value).on_screen)
+        self.assertEqual(cs.Pane.from_wire({"id": 1}).key, ("", 1))
+        self.assertTrue(cs.Pane.from_wire({"id": 1}).on_screen)
+
+    def test_panes_sharing_an_id_across_sessions_publish_separately(self):
+        threads = [thread("a", name="a"), thread("b", name="b")]
+        service, _ = self.make(
+            threads,
+            [self.client("x", True, "a | rozi"), self.client("y", False, "b | rozi")],
+        )
+        service.poll()
+        self.assertEqual(self.stopped, [])
+        self.assertEqual(service.owners, {"a": ("x", 1), "b": ("y", 1)})
+        self.assertEqual(set(service.hosts), {("x", 1), ("y", 1)})
+
+    def test_each_stream_names_its_session(self):
+        service = cs.SessionsService(cs.Settings(), FakeCli([], []))
+        with mock.patch.object(cs.subprocess, "Popen") as popen:
+            popen.return_value.stdout = iter(())
+            service.start_publisher(("y", 1))
+        environment = popen.call_args.kwargs["env"]
+        self.assertEqual(
+            (environment["ROZI_PANE"], environment["ROZI_SESSION_INSTANCE"]), ("1", "y")
+        )
+
+    def test_a_session_going_off_screen_keeps_its_publisher(self):
+        threads = [thread("a", name="a")]
+        service, cli = self.make(threads, [self.client("x", True)])
+        service.publishers = {("x", 1): object()}
+        service.poll()
+        cli.current = [self.client("x", False), self.client("y", True, "rozi")]
+        service.poll()
+        self.assertEqual(self.stopped, [])
+
+    def test_a_client_exiting_or_a_session_detaching_withdraws_only_its_pane(self):
+        threads = [thread("a", name="a")]
+        service, cli = self.make(threads, [self.client("y", True)])
+        service.publishers = {("x", 1): object(), ("y", 1): object()}
+        service.poll()
+        self.assertEqual(self.stopped, [("x", 1)])
+
+    def test_activations_stay_with_the_session_that_published_the_row(self):
+        threads = [thread("a", name="a")]
+        service, cli = self.make(threads, [])
+        service.known = {"a": threads[0]}
+        service.hosts = {
+            ("x", 1): cs.Host(self.client("x", False), "a"),
+        }
+        with mock.patch.object(cs, "switch") as switch:
+            service.activate(("x", 1), "a")
+        switch.assert_not_called()
+        self.assertEqual(service.memory, {})
+
+    def test_the_title_of_a_session_off_screen_is_told_apart_by_session(self):
+        cli = FakeCli([], [])
+        cli.panes = lambda: [self.client("x", False, "a | rozi"), self.client("y", True, "b | rozi")]
+        service = cs.SessionsService(cs.Settings(), cli)
+        service.title_changed()
+        self.assertEqual(set(service.titles), {("x", 1), ("y", 1)})
+
+
 class ServiceTests(unittest.TestCase):
     def test_settings_are_clamped_and_validated(self):
         settings = cs.Settings.from_environment({"ROZI_EXTENSION_CONFIG": json.dumps(
@@ -569,7 +661,7 @@ class ServiceTests(unittest.TestCase):
         service = cs.SessionsService(cs.Settings(), FakeCli(THREADS, []))
         with mock.patch.object(cs.subprocess, "Popen") as popen:
             popen.return_value.stdout = iter(())
-            service.start_publisher(7)
+            service.start_publisher(k(7))
         self.assertEqual(popen.call_args.args[0][1:], ["publish", "--kind", "agent"])
 
     def test_poll_publishes_each_host_once_until_its_rows_change(self):
@@ -587,7 +679,7 @@ class ServiceTests(unittest.TestCase):
         published = []
         service.publish = lambda pane_id, rows: published.append((pane_id, rows))
         service.poll()
-        self.assertEqual(published[0][0], 3)
+        self.assertEqual(published[0][0], k(3))
         self.assertEqual([(row["id"], row["active"]) for row in published[0][1]],
                          [("a", True), ("b", False)])
 
@@ -610,8 +702,8 @@ class ServiceTests(unittest.TestCase):
     def test_activating_a_row_no_longer_listed_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
         service = cs.SessionsService(cs.Settings(), cli)
-        service.hosts = {3: cs.Host(pane(), "a")}
-        service.activate(3, "vanished")
+        service.hosts = {k(3): cs.Host(pane(), "a")}
+        service.activate(k(3), "vanished")
         self.assertEqual(cli.typed, [])
         self.assertIn("no longer listed", cli.notes[0][0])
 
@@ -673,17 +765,17 @@ class ServiceTests(unittest.TestCase):
         cli.thread_list = cli.thread_list[:3]
         cli.titles[4] = "rozi"
         service.poll()
-        self.assertEqual(listings("bg"), [2])
+        self.assertEqual(listings("bg"), [k(2)])
         self.assertEqual(listings("c"), [])
         cli.titles[4] = "c | rozi"
         service.poll()
-        self.assertEqual(listings("bg"), [2])
+        self.assertEqual(listings("bg"), [k(2)])
 
     def test_switching_disabled_only_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
         service = cs.SessionsService(cs.Settings(switching=False), cli)
-        service.hosts = {3: cs.Host(pane(), "a")}
-        service.activate(3, "b")
+        service.hosts = {k(3): cs.Host(pane(), "a")}
+        service.activate(k(3), "b")
         self.assertEqual(cli.typed, [])
         self.assertIn("/resume", cli.notes[0][0])
 

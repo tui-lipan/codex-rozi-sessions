@@ -2,9 +2,9 @@
 id = "codex-rozi-sessions"
 title = "Codex threads"
 description = "One Activity row per Codex thread loaded in its background server, grouped by worktree; selecting a row switches Codex to it"
-version = "0.4.2"
+version = "0.5.0"
 api = 1
-min_rozi = "0.0.36"
+min_rozi = "0.0.40"
 homepage = "https://github.com/tui-lipan/codex-rozi-sessions"
 screenshots = ["docs/screenshot.webp"]
 
@@ -26,4 +26,7 @@ name = "watch"
 exec = ["python3", "./bin/codex_sessions.py"]
 # Beside each session's Codex background server, which a client on another machine cannot reach.
 placement = "each-host"
+# Keep every attached session's rows current, on screen or not. Typing and screen reads stay on the
+# session on screen.
+session_scope = "attached"
 restart = "on-failure"
