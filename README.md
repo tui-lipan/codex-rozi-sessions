@@ -174,3 +174,12 @@ rozi extensions install --link .
 ## License
 
 MPL-2.0. Contributions require a DCO sign-off.
+
+## Read final responses
+
+With a rozi build that advertises `agent-responses`, use `rozi agents prompt --ref <JSON>
+"Review this diff" --wait turn --timeout 10m --result` to read a thread's final response. The
+extension reads completed turns through Codex's read-only app-server API, including threads in
+background panes. Commentary and partial answers are excluded. Failed and interrupted turns have
+no final response. JSON reports `source: "native-api"` and `fidelity: "semantic"`. Text over 1 MiB
+is returned with `truncated: true` and `complete: false`.

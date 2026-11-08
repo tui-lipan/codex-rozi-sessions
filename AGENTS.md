@@ -16,7 +16,7 @@ Python service.
 ## Workflow rules
 
 - Use only public interfaces: `codex app-server daemon version`, the app-server protocol's
-  `initialize`, `thread/loaded/list`, and `thread/read` over the daemon's published socket, Codex's
+  `initialize`, `thread/loaded/list`, `thread/read`, `thread/turns/list`, and `thread/items/list` over the daemon's published socket, Codex's
   `/resume` command, and rozi's documented CLI (`list-panes`, `capture-pane`, `send-text`,
   `send-keys`, `notify`, `publish`) and extension environment. Never read Codex's or rozi's
   private state files, and never start the Codex daemon.

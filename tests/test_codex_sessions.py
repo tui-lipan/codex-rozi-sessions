@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import queue
@@ -416,6 +417,9 @@ class ScreenTests(unittest.TestCase):
 
 
 class FakeCli:
+    def final_response(self, thread_id):
+        return None
+
     def __init__(self, threads, screens, panes=None):
         self.thread_list = threads
         self.screens = list(screens)
@@ -666,6 +670,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_publishes_each_host_once_until_its_rows_change(self):
         class PollCli:
+            def final_response(self, thread_id):
+                return None
+
             def __init__(self):
                 self.thread_list = [thread("a", name="work"), thread("b", name="other")]
 
@@ -685,6 +692,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_a_retitled_pane_is_noticed_but_a_spinner_is_not(self):
         class TitleCli:
+            def final_response(self, thread_id):
+                return None
+
             title = "⠋ work | rozi"
 
             def panes(self):
@@ -709,6 +719,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_keeps_a_finished_background_thread_until_it_is_viewed(self):
         class PollCli:
+            def final_response(self, thread_id):
+                return None
+
             def __init__(self):
                 self.thread_list = [thread("a", name="work"), thread("b", name="other", status="active")]
                 self.title = "work | rozi"
@@ -739,6 +752,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_three_clients_publish_a_finished_background_thread_once(self):
         class PollCli:
+            def final_response(self, thread_id):
+                return None
+
             def __init__(self):
                 self.thread_list = [thread("a", name="a", created=2), thread("b", name="b", created=3),
                                     thread("c", name="c", created=4),
@@ -770,6 +786,30 @@ class ServiceTests(unittest.TestCase):
         cli.titles[4] = "c | rozi"
         service.poll()
         self.assertEqual(listings("bg"), [k(2)])
+
+    def test_a_background_completion_publishes_response_with_its_done_row(self):
+        cli = FakeCli([], [composer_frame()])
+        service = cs.SessionsService(cs.Settings(), cli)
+        running = thread("background", status="active")
+        service.observed.update([running])
+        response = {"text": "exact answer 🌷", "turn_id": "turn-42", "source": "native-api",
+                    "fidelity": "semantic", "complete": True, "truncated": False}
+        with patch.object(cli, "final_response", return_value=response) as read:
+            # The thread was unloaded between polls. Its last response must still be fetched.
+            service.collect_responses([])
+            read.assert_called_once_with("background")
+        stream = io.StringIO()
+        service.publishers[k(3)] = cs.Publisher(token=1, process=mock.Mock(stdin=stream))
+        rows = [{"id": "background", "title": "Review", "status": "done"}]
+        service.publish(k(3), rows)
+        document = json.loads(stream.getvalue())
+        self.assertEqual(document["rows"][0]["status"], "done")
+        self.assertEqual(document["responses"][0]["response"], response)
+        self.assertNotIn("response", service.memory[k(3)].published[0])
+        stream.seek(0)
+        stream.truncate()
+        service.publish(k(3), rows)
+        self.assertEqual(stream.getvalue(), "", "unchanged responses must not be replayed")
 
     def test_switching_disabled_only_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
@@ -889,6 +929,35 @@ def daemon_reply(threads):
 
 
 class AppServerTests(unittest.TestCase):
+    def test_final_response_pages_only_the_latest_completed_turn(self):
+        message = "## Findings\n| 🌷 | 日本語 |\n" * 3000
+        def handle(daemon, request):
+            method, params = request["method"], request["params"]
+            if method == "initialize":
+                result = {}
+            elif method == "thread/turns/list":
+                self.assertEqual(params["limit"], 1)
+                result = {"data": [{"id": "turn-42", "status": "completed"}]}
+            elif method == "thread/items/list":
+                self.assertEqual(params["turnId"], "turn-42")
+                if params.get("cursor") is None:
+                    result = {"data": [{"turnId": "turn-42", "item": {"type": "agentMessage", "phase": "commentary", "text": "progress"}}], "nextCursor": "next"}
+                else:
+                    result = {"data": [{"turnId": "turn-42", "item": {"type": "agentMessage", "phase": "final_answer", "text": message}}]}
+            else:
+                self.fail(method)
+            daemon.send({"id": request["id"], "result": result})
+        daemon = FakeDaemon(handle)
+        self.addCleanup(daemon.close)
+        server = cs.AppServer(cs.Settings())
+        self.addCleanup(server.close)
+        with patch.object(server, "socket_path", return_value=daemon.path):
+            response = server.final_response("background-thread")
+        self.assertEqual(response["text"], message)
+        self.assertEqual(response["turn_id"], "turn-42")
+        self.assertEqual(response["source"], "native-api")
+        self.assertTrue(response["complete"])
+
     def test_loaded_threads_over_the_daemon_protocol(self):
         wire = {
             "a": {"id": "a", "name": "work", "status": {"type": "active", "activeFlags": ["waitingOnApproval"]}},

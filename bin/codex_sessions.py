@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.4.2"
+VERSION = "0.6.0"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
@@ -249,6 +249,7 @@ class HostMemory:
     # spinner no longer does.
     last_shown: str | None = None
     published: list[dict[str, object]] | None = None
+    response_sequences: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -775,6 +776,40 @@ class AppServer:
         return threads
 
 
+    def final_response(self, thread_id: str) -> dict[str, object] | None:
+        """Read only the latest turn, then page backwards to its terminal assistant message."""
+        if not self.connect():
+            return None
+        result = self.request("thread/turns/list", {"threadId": thread_id, "limit": 1,
+                              "sortDirection": "desc", "itemsView": "summary"})
+        turns = result.get("data", []) if isinstance(result, dict) else []
+        if not turns or turns[0].get("status") != "completed" or turns[0].get("error"):
+            return None
+        turn_id = turns[0]["id"]
+        cursor = None
+        # Bound traversal even on an unusually tool-heavy turn. No earlier turn can qualify.
+        for _ in range(8):
+            page = self.request("thread/items/list", {"threadId": thread_id, "turnId": turn_id,
+                                "sortDirection": "desc", "limit": 100, "cursor": cursor})
+            for entry in page.get("data", []):
+                item = entry.get("item", {})
+                if entry.get("turnId") != turn_id or item.get("type") != "agentMessage":
+                    continue
+                if item.get("phase") not in {None, "final_answer"}:
+                    continue
+                message = item.get("text")
+                if isinstance(message, str):
+                    encoded = message.encode("utf-8")
+                    truncated = len(encoded) > 1024 * 1024
+                    return {"turn_id": turn_id, "text": encoded[:1024 * 1024].decode("utf-8", errors="ignore"),
+                            "source": "native-api", "fidelity": "semantic",
+                            "complete": not truncated, "truncated": truncated}
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
+        return None
+
+
 class Cli:
     """The external interfaces the service uses. Tests substitute their own."""
 
@@ -801,6 +836,9 @@ class Cli:
 
     def threads(self) -> list[Thread]:
         return self.daemon.loaded_threads()
+
+    def final_response(self, thread_id: str) -> dict[str, object] | None:
+        return self.daemon.final_response(thread_id)
 
     def panes(self) -> list[Pane]:
         return parse_panes(
@@ -1020,6 +1058,8 @@ class SessionsService:
         # The thread names each Codex pane's title carried when last read, to notice a switch.
         self.titles: dict[PaneKey, frozenset[str]] | None = None
         self.observed = Observed()
+        self.responses: dict[str, dict[str, object]] = {}
+        self.response_sequence = 0
         self.next_token = 1
         self.reported_error: str | None = None
 
@@ -1083,18 +1123,46 @@ class SessionsService:
                 return
             publisher = self.start_publisher(key)
             memory.published = None
-        if memory.published == rows:
+        responses = [self.responses[str(row["id"])] for row in rows
+                     if str(row["id"]) in self.responses
+                     and int(self.responses[str(row["id"])]["seq"]) > memory.response_sequences.get(str(row["id"]), 0)]
+        if memory.published == rows and not responses:
             return
         try:
             assert publisher.process.stdin is not None
-            write_line(publisher.process.stdin, {"rows": rows})
+            # Bound each line to one response. Other rows keep working until their content is sent.
+            for response in responses:
+                waiting = {str(item["id"]) for item in responses
+                           if int(item["seq"]) > memory.response_sequences.get(str(item["id"]), 0)
+                           and item["id"] != response["id"]}
+                current = [{**row, "status": "working"} if row["id"] in waiting else row for row in rows]
+                write_line(publisher.process.stdin, {"rows": current, "responses": [response]})
+                memory.response_sequences[str(response["id"])] = int(response["seq"])
+            if not responses:
+                write_line(publisher.process.stdin, {"rows": rows})
             memory.published = rows
         except (BrokenPipeError, OSError):
             # The pane went away or the UI moved to another session. Try again next poll.
             self.stop_publisher(key)
 
+    def collect_responses(self, loaded: list[Thread]) -> None:
+        running = {thread.thread_id for thread in loaded if thread.is_working()}
+        for thread_id in running:
+            self.responses.pop(thread_id, None)
+        for thread_id in self.observed.working.keys() - running:
+            try:
+                response = self.cli.final_response(thread_id)
+            except SessionsError:
+                continue
+            if response is not None:
+                self.response_sequence += 1
+                self.responses[thread_id] = {"id": thread_id, "seq": self.response_sequence, "response": response}
+        retained = {thread.thread_id for thread in loaded} | self.observed.finished.keys() | self.observed.working.keys()
+        self.responses = {key: value for key, value in self.responses.items() if key in retained}
+
     def poll(self) -> None:
         loaded = self.cli.threads()
+        self.collect_responses(loaded)
         self.observed.update(loaded)
         hosts = classify(self.cli.panes(), self.observed.listed(loaded), self.memory)
         self.observed.mark_viewed({host.active for host in hosts if host.active})
