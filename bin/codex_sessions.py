@@ -776,14 +776,14 @@ class AppServer:
         return threads
 
 
-    def final_response(self, thread_id: str) -> dict[str, object] | None:
+    def final_response(self, thread_id: str, previous_turn: str | None = None) -> dict[str, object] | None:
         """Read only the latest completed turn. Earlier turns can never supply its answer."""
         if not self.connect():
             return None
         result = self.request("thread/turns/list", {"threadId": thread_id, "limit": 1,
                               "sortDirection": "desc", "itemsView": "summary"})
         turn_id = latest_completed_turn(result)
-        if turn_id is None:
+        if turn_id is None or turn_id == previous_turn:
             return None
         for item in self.turn_items(thread_id, turn_id):
             if (item.get("type") == "agentMessage" and item.get("phase") in {None, "final_answer"}
@@ -847,8 +847,8 @@ class Cli:
     def threads(self) -> list[Thread]:
         return self.daemon.loaded_threads()
 
-    def final_response(self, thread_id: str) -> dict[str, object] | None:
-        return self.daemon.final_response(thread_id)
+    def final_response(self, thread_id: str, previous_turn: str | None = None) -> dict[str, object] | None:
+        return self.daemon.final_response(thread_id, previous_turn)
 
     def panes(self) -> list[Pane]:
         return parse_panes(
@@ -1070,6 +1070,7 @@ class SessionsService:
         self.observed = Observed()
         self.responses: dict[str, dict[str, object]] = {}
         self.response_sequence = 0
+        self.response_turns: dict[str, str] = {}
         self.next_token = 1
         self.reported_error: str | None = None
 
@@ -1165,16 +1166,28 @@ class SessionsService:
         running = {thread.thread_id for thread in loaded if thread.is_working()}
         for thread_id in running:
             self.responses.pop(thread_id, None)
-        for thread_id in self.observed.working.keys() - running:
-            try:
-                response = self.cli.final_response(thread_id)
-            except SessionsError:
-                continue
-            if response is not None:
-                self.response_sequence += 1
-                self.responses[thread_id] = {"id": thread_id, "seq": self.response_sequence, "response": response}
+        # A turn may start and finish between polls. Native turn IDs, rather than observing a
+        # working row, decide whether its answer is new. Initial history travels with initial rows.
+        candidates = {thread.thread_id for thread in loaded} | self.observed.working.keys()
+        for thread_id in candidates - running:
+            self.collect_response(thread_id)
         retained = {thread.thread_id for thread in loaded} | self.observed.finished.keys() | self.observed.working.keys()
+        self.retain_responses(retained)
+
+    def retain_responses(self, retained: set[str]) -> None:
         self.responses = {key: value for key, value in self.responses.items() if key in retained}
+        self.response_turns = {key: value for key, value in self.response_turns.items() if key in retained}
+
+    def collect_response(self, thread_id: str) -> None:
+        try:
+            response = self.cli.final_response(thread_id, self.response_turns.get(thread_id))
+        except SessionsError:
+            return
+        if response is None:
+            return
+        self.response_sequence += 1
+        self.response_turns[thread_id] = str(response["turn_id"])
+        self.responses[thread_id] = {"id": thread_id, "seq": self.response_sequence, "response": response}
 
     def poll(self) -> None:
         loaded = self.cli.threads()

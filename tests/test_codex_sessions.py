@@ -417,7 +417,7 @@ class ScreenTests(unittest.TestCase):
 
 
 class FakeCli:
-    def final_response(self, thread_id):
+    def final_response(self, thread_id, previous_turn=None):
         return None
 
     def __init__(self, threads, screens, panes=None):
@@ -670,7 +670,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_publishes_each_host_once_until_its_rows_change(self):
         class PollCli:
-            def final_response(self, thread_id):
+            def final_response(self, thread_id, previous_turn=None):
                 return None
 
             def __init__(self):
@@ -692,7 +692,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_a_retitled_pane_is_noticed_but_a_spinner_is_not(self):
         class TitleCli:
-            def final_response(self, thread_id):
+            def final_response(self, thread_id, previous_turn=None):
                 return None
 
             title = "⠋ work | rozi"
@@ -719,7 +719,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_keeps_a_finished_background_thread_until_it_is_viewed(self):
         class PollCli:
-            def final_response(self, thread_id):
+            def final_response(self, thread_id, previous_turn=None):
                 return None
 
             def __init__(self):
@@ -752,7 +752,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_three_clients_publish_a_finished_background_thread_once(self):
         class PollCli:
-            def final_response(self, thread_id):
+            def final_response(self, thread_id, previous_turn=None):
                 return None
 
             def __init__(self):
@@ -797,7 +797,7 @@ class ServiceTests(unittest.TestCase):
         with patch.object(cli, "final_response", return_value=response) as read:
             # The thread was unloaded between polls. Its last response must still be fetched.
             service.collect_responses([])
-            read.assert_called_once_with("background")
+            read.assert_called_once_with("background", None)
         stream = io.StringIO()
         service.publishers[k(3)] = cs.Publisher(token=1, process=mock.Mock(stdin=stream))
         rows = [{"id": "background", "title": "Review", "status": "done"}]
@@ -810,6 +810,20 @@ class ServiceTests(unittest.TestCase):
         stream.truncate()
         service.publish(k(3), rows)
         self.assertEqual(stream.getvalue(), "", "unchanged responses must not be replayed")
+
+    def test_completed_native_turns_are_detected_without_observing_working(self):
+        cli = FakeCli([], [composer_frame()])
+        service = cs.SessionsService(cs.Settings(), cli)
+        response = {"text": "fast answer", "turn_id": "turn-fast", "source": "native-api",
+                    "fidelity": "semantic", "complete": True, "truncated": False}
+        idle = thread("fast", status="idle")
+        with patch.object(cli, "final_response", side_effect=[response, None]) as read:
+            service.collect_responses([idle])
+            self.assertEqual(service.responses["fast"]["response"], response)
+            sequence = service.response_sequence
+            service.collect_responses([idle])
+            self.assertEqual(service.response_sequence, sequence)
+            self.assertEqual(read.call_args_list, [mock.call("fast", None), mock.call("fast", "turn-fast")])
 
     def test_switching_disabled_only_explains(self):
         cli = FakeCli(THREADS, [composer_frame()])
@@ -953,6 +967,9 @@ class AppServerTests(unittest.TestCase):
         self.addCleanup(server.close)
         with patch.object(server, "socket_path", return_value=daemon.path):
             response = server.final_response("background-thread")
+            requests = len(daemon.requests)
+            self.assertIsNone(server.final_response("background-thread", "turn-42"))
+            self.assertEqual(len(daemon.requests), requests + 1, "known turns do not re-read message bodies")
         self.assertEqual(response["text"], message)
         self.assertEqual(response["turn_id"], "turn-42")
         self.assertEqual(response["source"], "native-api")
