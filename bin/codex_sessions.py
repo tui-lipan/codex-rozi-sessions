@@ -777,37 +777,47 @@ class AppServer:
 
 
     def final_response(self, thread_id: str) -> dict[str, object] | None:
-        """Read only the latest turn, then page backwards to its terminal assistant message."""
+        """Read only the latest completed turn. Earlier turns can never supply its answer."""
         if not self.connect():
             return None
         result = self.request("thread/turns/list", {"threadId": thread_id, "limit": 1,
                               "sortDirection": "desc", "itemsView": "summary"})
-        turns = result.get("data", []) if isinstance(result, dict) else []
-        if not turns or turns[0].get("status") != "completed" or turns[0].get("error"):
+        turn_id = latest_completed_turn(result)
+        if turn_id is None:
             return None
-        turn_id = turns[0]["id"]
+        for item in self.turn_items(thread_id, turn_id):
+            if (item.get("type") == "agentMessage" and item.get("phase") in {None, "final_answer"}
+                    and isinstance(item.get("text"), str)):
+                return semantic_response(item["text"], turn_id)
+        return None
+
+    def turn_items(self, thread_id: str, turn_id: str):
+        """Page backwards, with a fixed traversal bound even for tool-heavy turns."""
         cursor = None
-        # Bound traversal even on an unusually tool-heavy turn. No earlier turn can qualify.
         for _ in range(8):
             page = self.request("thread/items/list", {"threadId": thread_id, "turnId": turn_id,
                                 "sortDirection": "desc", "limit": 100, "cursor": cursor})
             for entry in page.get("data", []):
-                item = entry.get("item", {})
-                if entry.get("turnId") != turn_id or item.get("type") != "agentMessage":
-                    continue
-                if item.get("phase") not in {None, "final_answer"}:
-                    continue
-                message = item.get("text")
-                if isinstance(message, str):
-                    encoded = message.encode("utf-8")
-                    truncated = len(encoded) > 1024 * 1024
-                    return {"turn_id": turn_id, "text": encoded[:1024 * 1024].decode("utf-8", errors="ignore"),
-                            "source": "native-api", "fidelity": "semantic",
-                            "complete": not truncated, "truncated": truncated}
+                if entry.get("turnId") == turn_id:
+                    yield entry.get("item", {})
             cursor = page.get("nextCursor")
             if not cursor:
-                break
+                return
+
+
+def latest_completed_turn(result: Any) -> str | None:
+    turns = result.get("data", []) if isinstance(result, dict) else []
+    if not turns or turns[0].get("status") != "completed" or turns[0].get("error"):
         return None
+    return text(turns[0].get("id"))
+
+
+def semantic_response(message: str, turn_id: str) -> dict[str, object]:
+    encoded = message.encode("utf-8")
+    truncated = len(encoded) > 1024 * 1024
+    return {"turn_id": turn_id, "text": encoded[:1024 * 1024].decode("utf-8", errors="ignore"),
+            "source": "native-api", "fidelity": "semantic",
+            "complete": not truncated, "truncated": truncated}
 
 
 class Cli:
@@ -1123,27 +1133,33 @@ class SessionsService:
                 return
             publisher = self.start_publisher(key)
             memory.published = None
-        responses = [self.responses[str(row["id"])] for row in rows
-                     if str(row["id"]) in self.responses
-                     and int(self.responses[str(row["id"])]["seq"]) > memory.response_sequences.get(str(row["id"]), 0)]
+        responses = self.pending_responses(memory, rows)
         if memory.published == rows and not responses:
             return
         try:
             assert publisher.process.stdin is not None
-            # Bound each line to one response. Other rows keep working until their content is sent.
-            for response in responses:
-                waiting = {str(item["id"]) for item in responses
-                           if int(item["seq"]) > memory.response_sequences.get(str(item["id"]), 0)
-                           and item["id"] != response["id"]}
-                current = [{**row, "status": "working"} if row["id"] in waiting else row for row in rows]
-                write_line(publisher.process.stdin, {"rows": current, "responses": [response]})
-                memory.response_sequences[str(response["id"])] = int(response["seq"])
-            if not responses:
-                write_line(publisher.process.stdin, {"rows": rows})
+            self.write_responses(publisher.process.stdin, rows, responses, memory)
             memory.published = rows
         except (BrokenPipeError, OSError):
             # The pane went away or the UI moved to another session. Try again next poll.
             self.stop_publisher(key)
+
+    def pending_responses(self, memory: HostMemory, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        responses = [self.responses[str(row["id"])] for row in rows if str(row["id"]) in self.responses]
+        return [item for item in responses if int(item["seq"]) > memory.response_sequences.get(str(item["id"]), 0)]
+
+    @staticmethod
+    def write_responses(stream: Any, rows: list[dict[str, object]],
+                        responses: list[dict[str, object]], memory: HostMemory) -> None:
+        # Bound each line to one response. Other rows stay working until their content is sent.
+        waiting = {str(item["id"]) for item in responses}
+        for response in responses:
+            waiting.discard(str(response["id"]))
+            current = [{**row, "status": "working"} if row["id"] in waiting else row for row in rows]
+            write_line(stream, {"rows": current, "responses": [response]})
+            memory.response_sequences[str(response["id"])] = int(response["seq"])
+        if not responses:
+            write_line(stream, {"rows": rows})
 
     def collect_responses(self, loaded: list[Thread]) -> None:
         running = {thread.thread_id for thread in loaded if thread.is_working()}
