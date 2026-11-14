@@ -294,6 +294,11 @@ class HostTests(unittest.TestCase):
         self.assertEqual(cs.Pane.from_wire(value).session, "t-1")
         self.assertIsNone(cs.Pane.from_wire({"id": 4}).session)
 
+    def test_a_pane_the_user_renamed_is_read_by_codexs_own_title(self):
+        value = {"id": 4, "title": "reference fix", "program_title": "⠋ Fix refs | rozi"}
+        self.assertEqual(cs.Pane.from_wire(value).title, "⠋ Fix refs | rozi")
+        self.assertEqual(cs.Pane.from_wire({"id": 4, "title": "x"}).title, "x")
+
     def test_a_client_on_its_start_screen_shows_it_as_the_active_row(self):
         threads = [thread("a", name="a", created=1), thread("b", name="b", created=2),
                    thread("blank", name=None, preview="", created=3)]

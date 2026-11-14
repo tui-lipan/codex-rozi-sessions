@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
@@ -222,7 +222,9 @@ class Pane:
             cwd=text(value.get("cwd")),
             program=text(value.get("foreground_program")),
             agent=text(value.get("agent")),
-            title=text(value.get("title")),
+            # What the client itself titled the pane: `title` is a name the user gave the pane
+            # instead, when there is one. A rozi without `program_title` sends only `title`.
+            title=text(value.get("program_title")) or text(value.get("title")),
             session=text(value.get("agent_session")),
             instance=session_instance(value),
             on_screen=value.get("on_screen") is not False,
