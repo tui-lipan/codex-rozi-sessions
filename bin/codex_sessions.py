@@ -10,7 +10,7 @@ activation by switching the client to that thread through Codex's own `/resume` 
 
 Everything goes through public interfaces: `codex app-server daemon version`, the app-server
 protocol's `thread/loaded/list` and `thread/read`, and rozi's `list-panes`, `capture-pane`,
-`send-text`, `send-keys`, `notify`, and `publish`.
+`send-text`, `send-keys`, `notify`, `publish`, and `agents list --all`.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
@@ -209,6 +209,8 @@ class Pane:
     # reach the session on screen, so `capture-pane` and `send-text` are for those panes only.
     instance: str | None = None
     on_screen: bool = True
+    # The name of that session, which `agents list --all` locates rows by.
+    session_name: str | None = None
 
     @classmethod
     def from_wire(cls, value: object) -> Pane | None:
@@ -228,6 +230,7 @@ class Pane:
             session=text(value.get("agent_session")),
             instance=session_instance(value),
             on_screen=value.get("on_screen") is not False,
+            session_name=text(value.get("session")),
         )
 
     @property
@@ -306,6 +309,32 @@ def parse_panes(output: str) -> list[Pane]:
     if not isinstance(data, list):
         raise SessionsError("rozi list-panes returned a non-list payload")
     return [pane for item in data if (pane := Pane.from_wire(item)) is not None]
+
+
+def elsewhere_threads(output: str, panes: list[Pane]) -> set[str]:
+    """The threads a Codex pane this service cannot see already lists: one in another local
+    session, published there by this extension running for another rozi client.
+
+    Every service reads the same background server, so without this a thread a client in another
+    session shows would also be listed here, in whichever pane it fell to."""
+    data = response_data(output, "agents list")
+    if not isinstance(data, list):
+        raise SessionsError("rozi agents list returned a non-list payload")
+    seen = {(pane.session_name, pane.pane_id) for pane in panes}
+    listed = set()
+    for agent in data:
+        location = agent.get("location") if isinstance(agent, dict) else None
+        if not isinstance(location, dict) or location.get("host"):
+            continue
+        row = location.get("row")
+        if not isinstance(row, dict):
+            continue
+        publisher, thread_id = text(row.get("publisher")), text(row.get("id"))
+        if (publisher or "").endswith(f"/{EXTENSION_ID}") and thread_id and (
+            text(location.get("session")), integer(location.get("pane"))
+        ) not in seen:
+            listed.add(thread_id)
+    return listed
 
 
 def title_names(title: str | None) -> list[str]:
@@ -421,16 +450,21 @@ def classify(
 
 
 def assign_owners(
-    hosts: list[Host], threads: list[Thread], owners: dict[str, PaneKey], scope: str
+    hosts: list[Host],
+    threads: list[Thread],
+    owners: dict[str, PaneKey],
+    scope: str,
+    elsewhere: frozenset[str] | set[str] = frozenset(),
 ) -> dict[str, int]:
     """The one Codex pane each listable thread is published in.
 
     Every client lists the daemon's threads, so a thread published by each pane it could belong
     to would appear once per pane. A thread belongs to the pane that shows it, then to the pane it
     last belonged to, so it stays put while a title cannot be read for a moment and after the
-    client moves on to another thread. A thread no pane has claimed yet goes to the pane working
-    nearest above its directory, the lowest pane on a tie; with `scope = "all"`, to the lowest
-    pane when none contains it."""
+    client moves on to another thread. A thread no pane has claimed yet stays out when a pane this
+    service cannot see already lists it, and otherwise goes to the pane working nearest above its
+    directory, the lowest pane on a tie; with `scope = "all"`, to the lowest pane when none
+    contains it."""
     by_pane = {host.pane.key: host for host in hosts}
     shown: dict[str, int] = {}
     for host in sorted(hosts, key=lambda host: host.pane.key):
@@ -443,6 +477,8 @@ def assign_owners(
         owner = shown.get(thread.thread_id)
         if owner is None and owners.get(thread.thread_id) in by_pane:
             owner = owners[thread.thread_id]
+        if owner is None and thread.thread_id in elsewhere:
+            continue
         if owner is None:
             owner = nearest_pane(thread, hosts, scope)
         if owner is not None:
@@ -857,6 +893,14 @@ class Cli:
             self.run([ROZI, "list-panes", "--scope", "attached", "--format", "json"])
         )
 
+    def listed_elsewhere(self, panes: list[Pane]) -> set[str]:
+        """See `elsewhere_threads`. Empty when rozi cannot say, such as with no UI on this host."""
+        try:
+            output = self.run([ROZI, "agents", "list", "--all", "--format", "json"])
+            return elsewhere_threads(output, panes)
+        except SessionsError:
+            return set()
+
     def pane(self, pane_id: int) -> Pane | None:
         return next(
             (pane for pane in self.panes() if pane.pane_id == pane_id and pane.on_screen), None
@@ -1195,7 +1239,9 @@ class SessionsService:
         loaded = self.cli.threads()
         self.collect_responses(loaded)
         self.observed.update(loaded)
-        hosts = classify(self.cli.panes(), self.observed.listed(loaded), self.memory)
+        panes = self.cli.panes()
+        elsewhere = self.cli.listed_elsewhere(panes)
+        hosts = classify(panes, self.observed.listed(loaded), self.memory)
         self.observed.mark_viewed({host.active for host in hosts if host.active})
         threads = self.observed.listed(loaded)
         self.known = {thread.thread_id: thread for thread in threads}
@@ -1206,7 +1252,7 @@ class SessionsService:
         for key in set(self.memory) - set(self.hosts):
             del self.memory[key]
         finished = set(self.observed.finished)
-        self.owners = assign_owners(hosts, threads, self.owners, self.settings.scope)
+        self.owners = assign_owners(hosts, threads, self.owners, self.settings.scope, elsewhere)
         for host in hosts:
             rows = host_rows(host, threads, self.owners, finished)
             self.publish(host.pane.key, rows)

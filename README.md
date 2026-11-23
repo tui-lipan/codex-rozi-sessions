@@ -63,8 +63,9 @@ only:
 1. The pane that shows it.
 2. Otherwise the pane it was last listed in, while that pane still runs Codex. A thread you leave,
    or one that keeps running in the background, stays with the client it came from.
-3. Otherwise the Codex pane working nearest above the thread's directory, the lowest pane number on
-   a tie. With `scope = "all"`, a thread no pane's directory contains goes to the lowest pane.
+3. Otherwise, unless a Codex pane in another local session already lists it, the Codex pane
+   working nearest above the thread's directory, the lowest pane number on a tie. With
+   `scope = "all"`, a thread no pane's directory contains goes to the lowest pane.
 
 Rows follow a switch made in Codex itself, with `/resume` or its thread picker, within about half
 a second, since the extension watches the pane's title between polls.

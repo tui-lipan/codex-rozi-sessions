@@ -425,6 +425,9 @@ class FakeCli:
     def final_response(self, thread_id, previous_turn=None):
         return None
 
+    def listed_elsewhere(self, panes):
+        return set()
+
     def __init__(self, threads, screens, panes=None):
         self.thread_list = threads
         self.screens = list(screens)
@@ -675,6 +678,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_publishes_each_host_once_until_its_rows_change(self):
         class PollCli:
+            def listed_elsewhere(self, panes):
+                return set()
+
             def final_response(self, thread_id, previous_turn=None):
                 return None
 
@@ -697,6 +703,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_a_retitled_pane_is_noticed_but_a_spinner_is_not(self):
         class TitleCli:
+            def listed_elsewhere(self, panes):
+                return set()
+
             def final_response(self, thread_id, previous_turn=None):
                 return None
 
@@ -724,6 +733,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_poll_keeps_a_finished_background_thread_until_it_is_viewed(self):
         class PollCli:
+            def listed_elsewhere(self, panes):
+                return set()
+
             def final_response(self, thread_id, previous_turn=None):
                 return None
 
@@ -757,6 +769,9 @@ class ServiceTests(unittest.TestCase):
 
     def test_three_clients_publish_a_finished_background_thread_once(self):
         class PollCli:
+            def listed_elsewhere(self, panes):
+                return set()
+
             def final_response(self, thread_id, previous_turn=None):
                 return None
 
@@ -791,6 +806,38 @@ class ServiceTests(unittest.TestCase):
         cli.titles[4] = "c | rozi"
         service.poll()
         self.assertEqual(listings("bg"), [k(2)])
+
+    def test_a_thread_another_sessions_pane_lists_is_not_listed_here(self):
+        """Each rozi client runs its own service. A thread a client in a session this one has not
+        attached shows must not land in this session's Codex pane as well."""
+        overview = json.dumps({"ok": True, "data": [
+            {"location": {"session": "dev", "pane": 104,
+                          "row": {"publisher": "1/codex-rozi-sessions", "id": "theirs"}}},
+            {"location": {"session": "here", "pane": 3,
+                          "row": {"publisher": "1/codex-rozi-sessions", "id": "bg"}}},
+            {"location": {"session": "dev", "pane": 7, "host": "box",
+                          "row": {"publisher": "1/codex-rozi-sessions", "id": "remote"}}},
+        ]})
+
+        class PollCli:
+            def final_response(self, thread_id, previous_turn=None):
+                return None
+
+            def threads(self):
+                return [thread(tid, name=tid, created=n)
+                        for n, tid in enumerate(["mine", "theirs", "bg", "remote"])]
+
+            def panes(self):
+                return [replace(pane(3, title="mine | rozi"), session_name="here")]
+
+            def listed_elsewhere(self, panes):
+                return cs.elsewhere_threads(overview, panes)
+
+        service = cs.SessionsService(cs.Settings(), PollCli())
+        published = {}
+        service.publish = lambda pane_id, rows: published.__setitem__(pane_id, rows)
+        service.poll()
+        self.assertEqual([row["id"] for row in published[k(3)]], ["mine", "bg", "remote"])
 
     def test_a_background_completion_publishes_response_with_its_done_row(self):
         cli = FakeCli([], [composer_frame()])

@@ -18,8 +18,8 @@ Python service.
 - Use only public interfaces: `codex app-server daemon version`, the app-server protocol's
   `initialize`, `thread/loaded/list`, `thread/read`, `thread/turns/list`, and `thread/items/list` over the daemon's published socket, Codex's
   `/resume` command, and rozi's documented CLI (`list-panes`, `capture-pane`, `send-text`,
-  `send-keys`, `notify`, `publish`) and extension environment. Never read Codex's or rozi's
-  private state files, and never start the Codex daemon.
+  `send-keys`, `notify`, `publish`, `agents list --all`) and extension environment. Never read
+  Codex's or rozi's private state files, and never start the Codex daemon.
 - Only read from the daemon. Never call a method that changes a thread, its settings, or the
   daemon.
 - Never type into Codex's prompt unless the screen shows an empty prompt and no dialog.
