@@ -65,7 +65,9 @@ only:
    or one that keeps running in the background, stays with the client it came from.
 3. Otherwise, unless a Codex pane in another local session already lists it, the Codex pane
    working nearest above the thread's directory, the lowest pane number on a tie. With
-   `scope = "all"`, a thread no pane's directory contains goes to the lowest pane.
+   `scope = "all"`, a thread no pane's directory contains goes to the lowest pane. A thread created
+   in the last 10 seconds waits while a Codex pane cannot yet say which thread it shows, since that
+   client most likely just started it.
 
 Rows follow a switch made in Codex itself, with `/resume` or its thread picker, within about half
 a second, since the extension watches the pane's title between polls.
@@ -92,9 +94,9 @@ Codex plugin, since a blank thread has no name to find it by.
 Failure reporting requires a Rozi build that supports the `error` agent state.
 
 Codex unloads an idle thread from its background server soon after its turn ends. A thread this
-extension saw finish stays listed as `done` after that, until a Codex pane has shown it and you
-have moved on to another thread. Other idle threads leave the list once Codex unloads them;
-`/resume` still opens them.
+extension saw finish in one of its panes stays listed as `done` after that, until a Codex pane has
+shown it and you have moved on to another thread. Other idle threads leave the list once Codex
+unloads them; `/resume` still opens them.
 
 ### With rozi's Codex plugin
 

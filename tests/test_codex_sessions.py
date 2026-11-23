@@ -222,6 +222,16 @@ class HostTests(unittest.TestCase):
         self.assertEqual(cs.assign_owners(hosts, threads, owners, "all"),
                          {"a": k(2), "a2": k(2), "b": k(2)})
 
+    def test_a_new_thread_waits_for_a_pane_that_has_not_named_its_thread(self):
+        """A client just started a turn: its title names no thread yet, and its new thread must not
+        land in the older pane meanwhile."""
+        threads = [thread("a", name="a", created=100), thread("new", name="new", created=995)]
+        hosts = [cs.Host(pane(1), "a"), cs.Host(pane(2), None)]
+        self.assertNotIn("new", cs.assign_owners(hosts, threads, {}, "all", now=1000))
+        self.assertEqual(cs.assign_owners(hosts, threads, {}, "all", now=1010)["new"], k(1))
+        settled = [cs.Host(pane(1), "a"), cs.Host(pane(2), "b")]
+        self.assertEqual(cs.assign_owners(settled, threads, {}, "all", now=1000)["new"], k(1))
+
     def test_hooks_name_a_thread_codex_has_not_named_yet(self):
         threads = [thread("a", name="a"), thread("fresh", name=None, preview="fix the bug")]
         hooked = replace(pane(4, title="rozi"), session="fresh")
@@ -379,6 +389,14 @@ class ObservedTests(unittest.TestCase):
         observed.mark_viewed({"b"})
         self.assertEqual(observed.listed([]), [])
         self.assertEqual(observed.viewed, set())
+
+    def test_an_unloaded_finished_thread_no_pane_here_listed_is_forgotten(self):
+        """A client in a session this service does not see ran it, then went away."""
+        observed = cs.Observed()
+        observed.update([thread("ours", status="active"), thread("theirs", status="active")])
+        observed.update([])
+        observed.drop_unowned([], {"ours"})
+        self.assertEqual(set(observed.finished), {"ours"})
 
     def test_an_idle_thread_that_never_ran_while_watched_is_not_kept(self):
         observed = cs.Observed()

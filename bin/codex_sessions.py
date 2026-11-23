@@ -34,7 +34,10 @@ from typing import Any, Callable
 
 ROZI = os.environ.get("ROZI_BIN", "rozi")
 EXTENSION_ID = "codex-rozi-sessions"
-VERSION = "0.6.2"
+VERSION = "0.6.3"
+# How long, in seconds, a new thread no pane can be seen showing waits for a Codex pane that does
+# not yet say which thread it shows: a client that has just started one names it within a poll.
+NEW_THREAD_GRACE = 10.0
 # How often the pane titles are read between polls, so that a switch made in Codex shows up at once.
 TITLE_INTERVAL = 0.5
 # Foreground programs that are a Codex client.
@@ -455,6 +458,7 @@ def assign_owners(
     owners: dict[str, PaneKey],
     scope: str,
     elsewhere: frozenset[str] | set[str] = frozenset(),
+    now: float | None = None,
 ) -> dict[str, int]:
     """The one Codex pane each listable thread is published in.
 
@@ -462,10 +466,17 @@ def assign_owners(
     to would appear once per pane. A thread belongs to the pane that shows it, then to the pane it
     last belonged to, so it stays put while a title cannot be read for a moment and after the
     client moves on to another thread. A thread no pane has claimed yet stays out when a pane this
-    service cannot see already lists it, and otherwise goes to the pane working nearest above its
-    directory, the lowest pane on a tie; with `scope = "all"`, to the lowest pane when none
-    contains it."""
+    service cannot see already lists it, or while it is new and some Codex pane does not yet say
+    which thread it shows, since that is most likely the client that started it. Otherwise it goes
+    to the pane working nearest above its directory, the lowest pane on a tie; with
+    `scope = "all"`, to the lowest pane when none contains it."""
     by_pane = {host.pane.key: host for host in hosts}
+    # Threads created after this wait for a pane that cannot say yet which thread it shows.
+    newer_than = (
+        now - NEW_THREAD_GRACE
+        if now is not None and any(host.active is None for host in hosts)
+        else None
+    )
     shown: dict[str, int] = {}
     for host in sorted(hosts, key=lambda host: host.pane.key):
         if host.active:
@@ -478,6 +489,8 @@ def assign_owners(
         if owner is None and owners.get(thread.thread_id) in by_pane:
             owner = owners[thread.thread_id]
         if owner is None and thread.thread_id in elsewhere:
+            continue
+        if owner is None and newer_than is not None and thread.created_at > newer_than:
             continue
         if owner is None:
             owner = nearest_pane(thread, hosts, scope)
@@ -1091,6 +1104,15 @@ class Observed:
                 del self.finished[thread_id]
                 self.viewed.discard(thread_id)
 
+    def drop_unowned(self, threads: list[Thread], owned: set[str]) -> None:
+        """Forget each finished thread Codex has unloaded that no pane of this service listed: its
+        client is elsewhere or gone, and no pane here would ever show it and move on."""
+        loaded = {thread.thread_id for thread in threads}
+        for thread_id in list(self.finished):
+            if thread_id not in loaded and thread_id not in owned:
+                del self.finished[thread_id]
+                self.viewed.discard(thread_id)
+
     def listed(self, threads: list[Thread]) -> list[Thread]:
         """The loaded threads, plus finished ones Codex has unloaded since."""
         loaded = {thread.thread_id for thread in threads}
@@ -1239,6 +1261,7 @@ class SessionsService:
         loaded = self.cli.threads()
         self.collect_responses(loaded)
         self.observed.update(loaded)
+        self.observed.drop_unowned(loaded, set(self.owners))
         panes = self.cli.panes()
         elsewhere = self.cli.listed_elsewhere(panes)
         hosts = classify(panes, self.observed.listed(loaded), self.memory)
@@ -1252,7 +1275,9 @@ class SessionsService:
         for key in set(self.memory) - set(self.hosts):
             del self.memory[key]
         finished = set(self.observed.finished)
-        self.owners = assign_owners(hosts, threads, self.owners, self.settings.scope, elsewhere)
+        self.owners = assign_owners(
+            hosts, threads, self.owners, self.settings.scope, elsewhere, time.time()
+        )
         for host in hosts:
             rows = host_rows(host, threads, self.owners, finished)
             self.publish(host.pane.key, rows)
